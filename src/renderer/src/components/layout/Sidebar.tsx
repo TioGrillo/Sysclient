@@ -187,7 +187,7 @@ export function Sidebar({ accounts, selectedAccount, mainTab, onSelectAccount, o
           <LogOut size={12} />
         </button>
       </div>
-      <div className="px-3 pb-2 text-center text-[10px] text-[rgb(var(--text-faint))]">PokeIdleBot v4.3.13</div>
+      <div className="px-3 pb-2 text-center text-[10px] text-[rgb(var(--text-faint))]">PokeIdleBot v4.3.14</div>
     </aside>
   );
 }

@@ -285,8 +285,9 @@ export class BotSession extends EventEmitter {
     if (autoHelper) {
       this.isVip = autoHelper.isVip || false;
       for (const b of autoHelper.balls || []) {
-        if (b.id !== undefined && b.quantity !== undefined) {
-          this.ballCounts[String(b.id)] = b.quantity;
+        const id = b.id ?? b.itemId;
+        if (id !== undefined && (b.quantity !== undefined || b.count !== undefined)) {
+          this.ballCounts[String(id)] = b.quantity ?? b.count;
         }
       }
       this.ok(`${this.isVip ? "VIP" : "Free"} | AutoCatch: ${autoHelper.autoCatch ? "ON" : "OFF"}`);
@@ -344,6 +345,9 @@ export class BotSession extends EventEmitter {
       try { this.ws.close(); } catch {}
       this.ws = null;
     }
+    if ((this as any)._ballsInterval) {
+      clearInterval((this as any)._ballsInterval);
+    }
     this.connected = false;
     this.emit("stats", this.stats());
     this.removeAllListeners();
@@ -390,6 +394,14 @@ export class BotSession extends EventEmitter {
     await this.syncConfig();
     this.info("Conectado e aguardando inicio de hunt.");
     this.emit("stats", this.stats());
+
+    if (!(this as any)._ballsInterval) {
+      (this as any)._ballsInterval = setInterval(() => {
+        if (this.connected && this.ws) {
+          this.wsSend("balls-get");
+        }
+      }, 30000);
+    }
   }
 
   private onMessage(raw: string) {
@@ -544,8 +556,9 @@ export class BotSession extends EventEmitter {
         if (Array.isArray(counts)) {
           const newCounts: Record<string, number> = {};
           for (const b of counts) {
-            if (b.id !== undefined && (b.quantity !== undefined || b.count !== undefined)) {
-              newCounts[String(b.id)] = b.quantity ?? b.count;
+            const id = b.id ?? b.itemId;
+            if (id !== undefined && (b.quantity !== undefined || b.count !== undefined)) {
+              newCounts[String(id)] = b.quantity ?? b.count;
             }
           }
           this.ballCounts = newCounts;
