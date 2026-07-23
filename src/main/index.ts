@@ -206,11 +206,15 @@ function registerHandlers(): void {
 
       const agent = new ProxyAgent(url);
       const start = Date.now();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
       const options: any = {
         dispatcher: agent,
         headers: { "User-Agent": "Mozilla/5.0" },
+        signal: controller.signal
       };
       const res = await fetch("https://poke.idleworld.online/api/game/ping", options);
+      clearTimeout(timeoutId);
       const latency = Date.now() - start;
       return { success: true, latency };
     } catch (e: any) {
@@ -499,7 +503,20 @@ function registerHandlers(): void {
 
   ipcMain.handle("bot:sell-pokemon", (_, name: string, pokeIds: string[]) => {
     const s = sessions.get(name);
-    return s ? s.sellPokemon(pokeIds) : null;
+    if (!s) return null;
+    return s.sellPokemon(pokeIds);
+  });
+
+  ipcMain.handle("bot:evolve-pokemon", async (_, name: string, pokeId: string, useStone: boolean) => {
+    const s = sessions.get(name);
+    if (!s) return { success: false, message: "Bot not found" };
+    return await s.evolvePokemon(pokeId, useStone);
+  });
+
+  ipcMain.handle("bot:evolve-pokemon-mass", async (_, name: string, pokeIds: string[], useStone: boolean) => {
+    const s = sessions.get(name);
+    if (!s) return { successCount: 0 };
+    return await s.evolvePokemonMass(pokeIds, useStone);
   });
 
   ipcMain.handle("bot:lock-pokemon", (_, name: string, capturedId: string, locked: boolean) => {

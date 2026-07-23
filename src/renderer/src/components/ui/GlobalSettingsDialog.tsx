@@ -99,20 +99,30 @@ export function GlobalSettingsDialog({ accounts, onImported, onClose, initialTab
     setProxyResult({ updated, missing, newAccounts: accs });
   };
 
-  const testProxies = async () => {
+    const testProxies = async () => {
     const list = proxyList.split("\n").map(l => l.trim()).filter(l => l.length > 0);
     if (list.length === 0) return;
     
     setIsTesting(true);
     setProxyTestResults([]);
     
-    const results: any[] = [];
-    for (const p of list) {
+    const activeProxies: string[] = [];
+    
+    await Promise.all(list.map(async (p) => {
       const res = await invoke<{ success: boolean, latency?: number, error?: string }>("proxy:test", p);
       const resultObj = { proxy: p, ...res };
-      results.push(resultObj);
-      setProxyTestResults([...results]);
-    }
+      
+      if (res.success) {
+        activeProxies.push(p);
+      }
+      
+      setProxyTestResults((prev) => {
+        if (!prev) return [resultObj];
+        return [...prev, resultObj];
+      });
+    }));
+    
+    setProxyList(activeProxies.join("\n"));
     setIsTesting(false);
   };
 
@@ -337,7 +347,7 @@ export function GlobalSettingsDialog({ accounts, onImported, onClose, initialTab
               
               <div>
                 <h2 className="text-xl font-bold text-[rgb(var(--text-primary))] tracking-wide">POKE IDLE BOT</h2>
-                <div className="text-[13px] text-[rgb(var(--accent))] mt-1 font-medium">Versao 4.3.14</div>
+                <div className="text-[13px] text-[rgb(var(--accent))] mt-1 font-medium">Versao 4.3.15</div>
               </div>
 
               <p className="text-[12px] text-[rgb(var(--text-muted))] max-w-[320px] leading-relaxed">

@@ -46,6 +46,8 @@ export interface AccountConfig {
   sell_loot_every_kills: number;
   buy_balls: boolean;
   buy_balls_min_gold: number;
+  auto_evolve: boolean;
+  auto_sleep: boolean;
   sell_config: SellConfig;
   auto_tasks: boolean;
   auto_battlepass: boolean;
@@ -134,6 +136,8 @@ export function createDefaultAccount(name: string, token: string, hunt: string):
     sell_loot_every_kills: 50,
     buy_balls: false,
     buy_balls_min_gold: 10000,
+    auto_evolve: true,
+    auto_sleep: true,
     sell_config: { ...DEFAULT_SELL_CONFIG },
     auto_tasks: false,
     auto_battlepass: false,

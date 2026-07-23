@@ -16,6 +16,7 @@ export function MyPokemonPanel({ accountName, onRefresh }: Props) {
   const [dexMap, setDexMap] = useState<Record<string, number>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selling, setSelling] = useState(false);
+  const [evolving, setEvolving] = useState(false);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
   // Filters
@@ -104,9 +105,28 @@ export function MyPokemonPanel({ accountName, onRefresh }: Props) {
     }
   };
 
+  const bulkEvolve = async () => {
+    if (selectedIds.size === 0 || evolving) return;
+    setEvolving(true);
+    try {
+      await invoke("bot:evolve-pokemon-mass", accountName, Array.from(selectedIds), true);
+      setSelectedIds(new Set());
+      loadPokemon();
+      onRefresh();
+    } finally {
+      setEvolving(false);
+    }
+  };
+
   const toggleLock = async (id: string) => {
     await invoke("bot:toggle-lock-pokemon", accountName, id);
     loadPokemon();
+  };
+
+  const evolvePokemon = async (id: string) => {
+    await invoke("bot:evolve-pokemon", accountName, id, true);
+    loadPokemon();
+    onRefresh();
   };
 
   const setLeader = async (id: string) => {
@@ -163,9 +183,13 @@ export function MyPokemonPanel({ accountName, onRefresh }: Props) {
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-[rgb(var(--accent))]/15 text-[rgb(var(--accent))] hover:bg-[rgb(var(--accent))]/25 disabled:opacity-40 transition-colors">
             <CheckSquare size={12} /> Selecionar por Filtros ({filteredPokemon.length})
           </button>
-          <button onClick={bulkSell} disabled={selectedIds.size === 0 || selling}
+          <button onClick={bulkSell} disabled={selectedIds.size === 0 || selling || evolving}
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-red-600 text-white hover:bg-red-500 disabled:opacity-40 transition-colors">
             <ShoppingCart size={12} /> Vender Selecionados ({selectedIds.size})
+          </button>
+          <button onClick={bulkEvolve} disabled={selectedIds.size === 0 || selling || evolving}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-purple-600 text-white hover:bg-purple-500 disabled:opacity-40 transition-colors">
+            <Zap size={12} /> Evoluir ({selectedIds.size})
           </button>
         </div>
       </div>
@@ -289,11 +313,14 @@ export function MyPokemonPanel({ accountName, onRefresh }: Props) {
                 {/* Bottom row: equip + lock + select indicator */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <button onClick={(e) => { e.stopPropagation(); setLeader(id); }} className="text-[rgb(var(--text-faint))] hover:text-green-400 transition-colors" title="Definir Líder">
+                    <button onClick={(e) => { e.stopPropagation(); setLeader(id); }} className="text-[rgb(var(--text-faint))] hover:text-green-400 transition-colors" title="Definir Lider">
                       <Swords size={12} />
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); toggleLock(id); }} className="text-[rgb(var(--text-faint))] hover:text-[rgb(var(--text-secondary))] transition-colors" title={p.locked ? "Desbloquear" : "Bloquear"}>
                       {p.locked ? <Lock size={12} className="text-amber-400" /> : <Unlock size={12} />}
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); evolvePokemon(id); }} className="text-[rgb(var(--text-faint))] hover:text-purple-400 transition-colors" title="Evoluir">
+                      <Zap size={12} />
                     </button>
                   </div>
                   <div className="w-4 h-4 rounded border flex items-center justify-center transition-colors" style={{ borderColor: sel ? "rgb(var(--accent))" : "rgb(var(--border))", background: sel ? "rgb(var(--accent))" : "transparent" }}>
@@ -319,6 +346,7 @@ export function MyPokemonPanel({ accountName, onRefresh }: Props) {
                 <th className="px-3 py-1.5 font-medium">Quality</th>
                 <th className="px-3 py-1.5 font-medium">Equipar</th>
                 <th className="px-3 py-1.5 font-medium">Lock</th>
+                <th className="px-3 py-1.5 font-medium">Evoluir</th>
                 <th className="px-3 py-1.5 font-medium">Select</th>
               </tr>
             </thead>
@@ -352,13 +380,18 @@ export function MyPokemonPanel({ accountName, onRefresh }: Props) {
                     <td className="px-3 py-1.5 text-[rgb(var(--text-muted))]">{p.score ?? "-"}</td>
                     <td className="px-3 py-1.5 text-[rgb(var(--text-muted))]">{p.quality ?? "-"}</td>
                     <td className="px-3 py-1.5">
-                      <button onClick={(e) => { e.stopPropagation(); setLeader(id); }} className="text-[rgb(var(--text-faint))] hover:text-green-400 transition-colors" title="Definir Líder">
+                      <button onClick={(e) => { e.stopPropagation(); setLeader(id); }} className="text-[rgb(var(--text-faint))] hover:text-green-400 transition-colors" title="Definir Lider">
                         <Swords size={12} />
                       </button>
                     </td>
                     <td className="px-3 py-1.5">
                       <button onClick={(e) => { e.stopPropagation(); toggleLock(id); }} className="text-[rgb(var(--text-faint))] hover:text-[rgb(var(--text-secondary))] transition-colors" title={p.locked ? "Desbloquear" : "Bloquear"}>
                         {p.locked ? <Lock size={12} className="text-amber-400" /> : <Unlock size={12} />}
+                      </button>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <button onClick={(e) => { e.stopPropagation(); evolvePokemon(id); }} className="text-[rgb(var(--text-faint))] hover:text-purple-400 transition-colors" title="Evoluir">
+                        <Zap size={12} />
                       </button>
                     </td>
                     <td className="px-3 py-1.5">

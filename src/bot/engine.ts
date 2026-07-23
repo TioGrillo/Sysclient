@@ -75,6 +75,9 @@ export class BotSession extends EventEmitter {
   heroHp = 1;
   heroMaxHp = 1;
   heroLevel = 1;
+  private _evolutionCheckPending = false;
+  private _lacksEvolutionStone = false;
+  private _lastLeaderId: string | null = null;
   heroXpPct = 0;
   sessionStart = Date.now();
   ws: WebSocket | null = null;
@@ -101,6 +104,8 @@ export class BotSession extends EventEmitter {
   private _lastDeltaPoke: any = null;
   private _lastCatchInfo: any = null;
   private _healingInProgress = false;
+  private _evolutionInProgress = false;
+  private _sellingLootInProgress = false;
   private _sessionXp = 0;
   private _startXp: number | null = null;
   private _startGold: number | null = null;
@@ -110,6 +115,8 @@ export class BotSession extends EventEmitter {
   private _routeIdx = 0;
   private _routeKills = 0;
   private _routeCaptures = 0;
+  private _lastShinySpecies: string | null = null;
+  private _lastShinyTime = 0;
 
   constructor(cfg: AccountConfig) {
     super();
@@ -255,6 +262,8 @@ export class BotSession extends EventEmitter {
       }
       const res = await fetch(url, options);
       if (res.ok) return await res.json();
+      const text = await res.text();
+      this.err(`HTTP POST falhou em ${path}: ${res.status} - ${text}`);
     } catch (e) {
       this.err(`HTTP POST error: ${e}`);
     }
@@ -387,8 +396,11 @@ export class BotSession extends EventEmitter {
     this.connected = true;
     this.ok("WebSocket conectado!");
     this.wsSend("pokes-get");
-    this.wsSend("pending-get");
-    this.wsSend("balls-get");
+    this.wsSend("history-get");
+    this.wsSend("boosts-get");
+    if (this.cfg.auto_sleep !== false) {
+      this.wsSend("sleep-mode");
+    }
     this.wsSend("inv-get");
     this.wsSend("boosts-refresh");
     await this.syncConfig();
@@ -445,6 +457,10 @@ export class BotSession extends EventEmitter {
         this.team = this.pokeList.filter((p: any) => p.leader || p.team);
         const leader = this.pokeList.find((p: any) => p.leader);
         if (leader) {
+          if (this._lastLeaderId !== leader.id) {
+            this._lastLeaderId = leader.id;
+            this._lacksEvolutionStone = false;
+          }
           this.heroHp = leader.hp || 0;
           this.heroMaxHp = leader.maxHp || 1;
           if (leader.level) this.heroLevel = leader.level;
@@ -464,9 +480,9 @@ export class BotSession extends EventEmitter {
             }
         }
 
-        if (this.heroHp <= 0 && this.running && !this._healingInProgress) {
-          this.healAndReturn();
-        }
+          if (this.heroHp <= 0 && this.running && !this._healingInProgress && !this._sellingLootInProgress) {
+            this.healAndReturn();
+          }
         this.checkRoutes();
         break;
 
@@ -487,11 +503,18 @@ export class BotSession extends EventEmitter {
           this.lootGold += gold;
         }
         
+        if (msg.shiny) {
+          this._lastShinySpecies = msg.speciesName;
+          this._lastShinyTime = Date.now();
+        }
+
         this.klog(`Kill #${this.kills} ${msg.shiny ? "[SHINY] " : ""}${msg.speciesName || "?"} | +${msg.xpGained || 0}xp`);
         if (msg.leveledUp) {
           this.heroLevel = msg.newLevel || this.heroLevel + 1;
           this.lulog(`Subiu para nivel ${this.heroLevel}!`);
-          this.checkRoutes();
+          this.checkEvolution().then((evolving) => {
+            if (!evolving) this.checkRoutes();
+          });
         }
         if (this.kills % 300 === 0) this.wsSend("pokes-get");
         if (this.kills % (this.cfg.sell_loot_every_kills || 50) === 0) {
@@ -508,9 +531,15 @@ export class BotSession extends EventEmitter {
         const success = msg.success || false;
         const pk = msg.poke || msg.pokemon || msg.entry || msg.data || msg;
         const species = msg.speciesName || pk.speciesName || pk.name || "?";
-        const shiny = msg.shiny || pk.shiny || false;
+        let shiny = msg.shiny || pk.shiny || false;
         
         let bid = msg.ballId;
+        
+        // Compensate for server occasionally missing the shiny flag
+        if (!shiny && this._lastShinySpecies && species === this._lastShinySpecies && Date.now() - this._lastShinyTime < 15000) {
+          shiny = true;
+        }
+
         if (!bid) {
           bid = shiny ? (this.sellCfg.shiny_ball_id || 5) : (this.sellCfg.catch_ball_id || 4);
         }
@@ -599,13 +628,22 @@ export class BotSession extends EventEmitter {
         this.info(`Auto-heal: ${msg.kind} ${msg.name || ""}`);
         break;
 
-      case "poke-xp":
-        if (msg.poke) {
-          const p = msg.poke;
-          if (p.level) this.heroLevel = p.level;
+        case "poke-xp": {
+          const oldLevel = this.heroLevel;
+          if (msg.poke) {
+            const p = msg.poke;
+            if (p.level) this.heroLevel = p.level;
+          }
+          if (msg.leveledUp || this.heroLevel > oldLevel) {
+            this.lulog(`Subiu para nivel ${this.heroLevel}!`);
+            this.checkEvolution().then((evolving) => {
+              if (!evolving) this.checkRoutes();
+            });
+          } else {
+            this.checkRoutes();
+          }
+          break;
         }
-        this.checkRoutes();
-        break;
 
       case "boosts":
         this.boosts = msg.boosts || msg.list || [];
@@ -617,6 +655,12 @@ export class BotSession extends EventEmitter {
 
       case "joy-healed":
         this.ok("Curado na Joy!");
+        break;
+
+      case "sleep-ok":
+        if (this.cfg.auto_sleep !== false) {
+           this.ok("Modo soneca ativado (Farm Offline ON + Hunt Simultanea)!");
+        }
         break;
     }
 
@@ -667,7 +711,13 @@ export class BotSession extends EventEmitter {
         
         if (!this._thrownPids.has(pid)) {
           this._thrownPids.add(pid);
-          const shiny = p.shiny || false;
+          let shiny = p.shiny || false;
+          let species = p.speciesName || p.name || p.species || "";
+          
+          if (!shiny && this._lastShinySpecies && (species === this._lastShinySpecies || !species) && Date.now() - this._lastShinyTime < 15000) {
+            shiny = true;
+          }
+          if (!species) species = shiny ? (this._lastShinySpecies || "pokemon") : "pokemon";
           
           let ballId = 4;
           if (shiny) {
@@ -683,9 +733,9 @@ export class BotSession extends EventEmitter {
           const count = this.ballCounts[String(ballId)] || 0;
           if (count > 0) {
             if (shiny) {
-              this.clog(`✨ [SHINY] Lançando bola ID ${ballId} no pokemon...`);
+              this.clog(`✨ [SHINY] Lançando bola ID ${ballId} no ${species}...`);
             } else {
-              this.clog(`Lançando bola ID ${ballId} no pokemon...`);
+              this.clog(`Lançando bola ID ${ballId} no ${species}...`);
             }
             this.wsSend("catch", { pendingId: pid, ballId });
             this.emit("stats", this.stats());
@@ -701,19 +751,52 @@ export class BotSession extends EventEmitter {
     this._catchWorkerRunning = false;
   }
 
-  private async doSellLoot() {
-    const res = await this.httpPost("/api/game/shop/sell", { categories: ["loot"] });
-    if (res && res.gold !== undefined) {
-      this.gold = res.gold;
-      this.emit("stats", this.stats());
+    private async doSellLoot() {
+      if (!this.running || !this.userStartedHunt || this._healingInProgress || this._evolutionInProgress || this._sellingLootInProgress) return;
+      this._sellingLootInProgress = true;
+      this.info("Pausando a hunt para ir a cidade vender loot no Mark...");
+      
+      const wasInHunt = this.inHunt;
+      if (wasInHunt) {
+        this.wsSend("leave-hunt");
+        this.inHunt = false;
+      }
+      
+      await new Promise(r => setTimeout(r, 1500));
+      
+      try {
+        const res = await this.httpPost("/api/game/shop/sell", { categories: ["loot"] });
+        if (res && res.gold !== undefined) {
+          const gained = res.gold - this.gold;
+          this.gold = res.gold;
+          this.ok(`Loot vendido no Mark! Ganhou ${gained} de Gold. Novo saldo: ${this.gold}`);
+          this.emit("stats", this.stats());
+        }
+      } catch (e: any) {
+        this.err(`Erro ao vender loot: ${e.message}`);
+      }
+      
+      if (wasInHunt && this.running && this.userStartedHunt) {
+        if (this.cfg.route_enabled) {
+          await this.checkRoutes();
+        }
+        if (!this.inHunt) {
+          const slug = this.huntSlug || await this.resolveHuntSlug(this.cfg.hunt || "");
+          if (slug) {
+            this.wsSend("enter-hunt", { slug });
+            this.inHunt = true;
+            this.ok(`Voltando para a hunt: ${slug} apos vender loot.`);
+          }
+        }
+      }
+      this._sellingLootInProgress = false;
     }
-  }
-
-  private healAndReturn() {
-    if (this._healingInProgress || !this.running) return;
-    this._healingInProgress = true;
+  
+    private healAndReturn() {
+      if (this._healingInProgress || this._sellingLootInProgress || !this.running) return;
+      this._healingInProgress = true;
     this.warn("Iniciando cura...");
-    this.wsSend("exit-hunt");
+    this.wsSend("leave-hunt");
     setTimeout(() => {
       this.wsSend("use-heal", { itemId: 205 });
       this.wsSend("use-heal", { itemId: 204 });
@@ -744,10 +827,119 @@ export class BotSession extends EventEmitter {
     }, 500);
   }
 
+  private isEvolutionLevel(lvl: number): boolean {
+    const thresholds = [40, 60, 80, 100, 120];
+    for (const t of thresholds) {
+      if (lvl >= t - 1 && lvl <= t + 2) return true;
+    }
+    return false;
+  }
+
+  private async checkEvolution(): Promise<boolean> {
+      if (this.cfg.auto_evolve === false) return false;
+      if (this._healingInProgress || this._evolutionInProgress || this._sellingLootInProgress || this.heroHp <= 0) return false;
+      if (!this.isEvolutionLevel(this.heroLevel)) return false;
+      
+      const leader = this.pokeList.find((p: any) => p.leader);
+      if (!leader || !leader.id) return false;
+      
+      this._evolutionCheckPending = true;
+      this.info(`[EVOLUCAO] Checando se ${leader.species || leader.name || "?"} (Lv ${this.heroLevel}) pode evoluir...`);
+      try {
+        const res = await this.httpGet(`/api/game/evolve?capturedId=${leader.id}`);
+        if (res && res.canEvolve) {
+          if (res.hasStones) {
+            this._lacksEvolutionStone = false;
+            this.info(`Condicoes de evolucao atingidas para ${leader.species || leader.name || "?"}. Saindo da hunt para evoluir...`);
+            this._evolutionInProgress = true;
+            const wasInHunt = this.inHunt;
+            if (wasInHunt) {
+              this.wsSend("leave-hunt");
+              this.inHunt = false;
+            }
+            
+            setTimeout(async () => {
+              const evRes = await this.httpPost("/api/game/evolve", { capturedId: leader.id, useStone: true });
+              if (evRes && evRes.ok) {
+                this.ok(`[OK] Evoluiu com sucesso para ${evRes.name || evRes.destName || "?"}!`);
+                this._lacksEvolutionStone = false;
+              } else {
+                this.err(`Falha ao evoluir: ${evRes?.message || "Desconhecido"}`);
+              }
+              this.wsSend("pokes-get");
+              setTimeout(async () => {
+                this._evolutionInProgress = false;
+                if (this.running && this.userStartedHunt) {
+                  if (this.cfg.route_enabled) {
+                    await this.checkRoutes();
+                  }
+                  if (wasInHunt && this.huntSlug) {
+                    this.wsSend("enter-hunt", { slug: this.huntSlug });
+                    this.inHunt = true;
+                  }
+                }
+              }, 1500);
+            }, 2000); 
+            this._evolutionCheckPending = false;
+            return true;
+          } else {
+             this._lacksEvolutionStone = true;
+             this.warn(`[EVOLUCAO] O pokemon ${leader.species || leader.name || "?"} pode evoluir, porem faltam pedras/itens necessarios! Continuando na hunt atual...`);
+             this._evolutionCheckPending = false;
+             return true;
+          }
+        } else {
+             this.warn(`[EVOLUCAO] ${leader.species || leader.name || "?"} (Lv ${this.heroLevel}) não possui evolução neste nível ou jogo.`);
+        }
+      } catch (e: any) {
+        if (e.message && e.message.includes("não tem evolução")) {
+           this.warn(`[EVOLUCAO] ${leader.species || leader.name || "?"} (Lv ${this.heroLevel}) não tem evolução no jogo.`);
+        } else {
+           this.err(`Erro na checagem de evolucao: ${e.message}`);
+        }
+      }
+      
+      this._evolutionCheckPending = false;
+      return false;
+    }
+
+    async evolvePokemon(capturedId: string, useStone: boolean = true) {
+      this.info(`Tentando evoluir manualmente o pokemon ID ${capturedId}...`);
+      try {
+        const evRes = await this.httpPost("/api/game/evolve", { capturedId, useStone });
+        if (evRes && evRes.ok) {
+           this.ok(`[OK] Evoluiu com sucesso para ${evRes.name || evRes.destName || "?"}!`);
+           this.wsSend("pokes-get");
+           return { success: true, message: `Evoluiu para ${evRes.name || evRes.destName || "?"}` };
+        } else {
+           this.err(`Falha ao evoluir: ${evRes?.message || "Desconhecido"}`);
+           return { success: false, message: evRes?.message || "Erro desconhecido" };
+        }
+      } catch (e: any) {
+        this.err(`Erro ao evoluir: ${e.message}`);
+        return { success: false, message: e.message };
+      }
+    }
+
+    async evolvePokemonMass(pokeIds: string[], useStone: boolean = true) {
+       this.info(`Tentando evoluir massivamente ${pokeIds.length} pokemons...`);
+       let successCount = 0;
+       for (const id of pokeIds) {
+          try {
+             const evRes = await this.httpPost("/api/game/evolve", { capturedId: id, useStone });
+             if (evRes && evRes.ok) successCount++;
+             await new Promise(r => setTimeout(r, 600)); // Anti-spam delay
+          } catch(e) {}
+       }
+       this.ok(`Evolução massiva concluída. Sucessos: ${successCount}/${pokeIds.length}`);
+       this.wsSend("pokes-get");
+       return { successCount };
+    }
+
   private async checkRoutes() {
-    if (!this.userStartedHunt) return;
-    if (this._healingInProgress || this.heroHp <= 0) return;
-    if (!this.cfg.route_enabled) return;
+      if (!this.userStartedHunt) return;
+      if (this._healingInProgress || this._evolutionInProgress || this._sellingLootInProgress || this._evolutionCheckPending || this.heroHp <= 0) return;
+      if (!this.cfg.route_enabled) return;
 
     let rules = this.cfg.route_rules || [];
     
@@ -778,9 +970,9 @@ export class BotSession extends EventEmitter {
     const maxRouteLv = lastRule.max_lv || 999;
     
     if (this.heroLevel >= maxRouteLv) {
-      if (!this.cfg.route_continue_infinite && this.inHunt) {
+      if (!this.cfg.route_continue_infinite && this.inHunt && !this._lacksEvolutionStone) {
          this.warn(`[ROTA CONCLUIDA] Nivel do Pokemon (${this.heroLevel}) atingiu o limite da ultima rota (${maxRouteLv}). Parando hunt automaticamente!`);
-         this.wsSend("exit-hunt");
+         this.wsSend("leave-hunt");
          this.inHunt = false;
          return;
       } else {
@@ -833,7 +1025,16 @@ export class BotSession extends EventEmitter {
                 this.warn(`[ATENÇÃO] A rota requer a hunt '${ruleHunt}'. Se o jogo EXIGIR evolução do Pokemon para continuar, certifique-se de evoluí-lo na aba Equipe/Box!`);
             }
             
-            this.wsSend("enter-hunt", { slug: ruleHunt });
+            this.wsSend("leave-hunt");
+            this.inHunt = false;
+            
+            // Delay before entering new hunt to ensure server processes the leave
+            setTimeout(() => {
+                if (this.running && this.userStartedHunt) {
+                    this.wsSend("enter-hunt", { slug: ruleHunt });
+                    this.inHunt = true;
+                }
+            }, 1500);
         }
       }
     }
@@ -909,7 +1110,7 @@ export class BotSession extends EventEmitter {
   async claimStreak() {
     const wasInHunt = this.inHunt;
     if (wasInHunt) {
-      this.wsSend("exit-hunt");
+      this.wsSend("leave-hunt");
       await new Promise(r => setTimeout(r, 1000));
     }
     const res = await this.httpPost("/api/game/daily", {});
@@ -922,7 +1123,7 @@ export class BotSession extends EventEmitter {
   async claimGifts() {
     const wasInHunt = this.inHunt;
     if (wasInHunt) {
-      this.wsSend("exit-hunt");
+      this.wsSend("leave-hunt");
       await new Promise(r => setTimeout(r, 1000));
     }
     try {
@@ -947,7 +1148,7 @@ export class BotSession extends EventEmitter {
   async claimBattlepass() {
     const wasInHunt = this.inHunt;
     if (wasInHunt) {
-      this.wsSend("exit-hunt");
+      this.wsSend("leave-hunt");
       await new Promise(r => setTimeout(r, 1000));
     }
     const res = await this.httpPost("/api/game/battlepass/claim", {});
@@ -1081,9 +1282,9 @@ export class BotSession extends EventEmitter {
   async buyItem(itemId: number, qty: number = 1) {
     let payload: any;
     if (itemId >= 10 || itemId >= 200) {
-      payload = { itemId, quantity: qty };
+      payload = { itemId, quantity: qty, amount: qty, count: qty, qty: qty };
     } else {
-      payload = { ballId: itemId, quantity: qty };
+      payload = { ballId: itemId, quantity: qty, amount: qty, count: qty, qty: qty };
     }
     const res = await this.httpPost("/api/game/shop/buy", payload);
     if (res?.ok) {
@@ -1135,7 +1336,7 @@ export class BotSession extends EventEmitter {
     if (!data && this.inHunt && this.connected) {
       this.info("Loja exige estar na Cidade. Saindo da hunt temporariamente...");
       const wasUserStarted = this.userStartedHunt;
-      this.wsSend("exit-hunt");
+      this.wsSend("leave-hunt");
       this.inHunt = false;
       await new Promise(r => setTimeout(r, 1500));
       data = await this.httpGet("/api/game/shop");
@@ -1227,7 +1428,7 @@ export class BotSession extends EventEmitter {
     if (!data && this.inHunt && this.connected) {
       this.info("Depot exige estar na Cidade. Saindo da hunt temporariamente...");
       const wasUserStarted = this.userStartedHunt;
-      this.wsSend("exit-hunt");
+      this.wsSend("leave-hunt");
       this.inHunt = false;
       await new Promise(r => setTimeout(r, 1500));
       data = await this.httpGet("/api/game/depot");

@@ -73,7 +73,7 @@ export const useBotStore = create<BotStore>((set, get) => ({
   logs: [],
   captures: [],
   significantCaptures: JSON.parse(localStorage.getItem('significantCaptures') || '[]'),
-  maxLogs: 500,
+  maxLogs: 10000,
 
   setAccounts: (accounts) => set({ accounts }),
   setActiveAccount: (name) => set({ activeAccount: name }),

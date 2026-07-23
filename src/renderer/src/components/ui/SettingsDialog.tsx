@@ -127,6 +127,8 @@ export function SettingsDialog({ account, onSave, onClose }: Props) {
               <Field label="Auto-Potion"><div className="flex items-center gap-2"><Toggle checked={cfg.auto_potion} onChange={(v) => update("auto_potion", v)} /><span className="text-[12px] text-[rgb(var(--text-muted))]">HP &le;</span><input type="number" value={cfg.auto_potion_pct} min={1} max={99} onChange={(e) => update("auto_potion_pct", Number(e.target.value))} className={`${inputCls} w-16`} disabled={!cfg.auto_potion} /><span className="text-[12px] text-[rgb(var(--text-muted))]">%</span></div></Field>
               <Field label="Auto-Revive"><Toggle checked={cfg.auto_revive} onChange={(v) => update("auto_revive", v)} /></Field>
               <Field label="Auto-Resgatar BattlePass"><Toggle checked={cfg.auto_claim_battlepass} onChange={(v) => update("auto_claim_battlepass", v)} /></Field>
+              <Field label="Auto-Evoluir (Com Pedras)"><Toggle checked={cfg.auto_evolve ?? true} onChange={(v) => update("auto_evolve", v)} /></Field>
+              <Field label="Auto-Soneca (Farm Offline Extra)"><Toggle checked={cfg.auto_sleep ?? true} onChange={(v) => update("auto_sleep", v)} /></Field>
               <Field label="Auto-Comprar MAX ao esgotar"><Toggle checked={cfg.auto_buy_max} onChange={(v) => update("auto_buy_max", v)} /></Field>
             </>
           )}

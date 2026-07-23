@@ -977,7 +977,7 @@ function MarketShopView({ accounts, sel, stats }: { accounts: AccountConfig[], s
     });
 
     let anyBought = false;
-    for (const accName of names) {
+    const tasks = names.map(accName => async () => {
       const s = stats[accName];
       const accGold = s?.gold || 0;
       let currentGold = accGold;
@@ -1005,7 +1005,6 @@ function MarketShopView({ accounts, sel, stats }: { accounts: AccountConfig[], s
           } else {
             addMassLog(accName, "error", `Falha ao comprar (API rejeitou)`);
           }
-          await new Promise(r => setTimeout(r, 250));
         } catch (e: any) {
           addMassLog(accName, "error", `Erro: ${e.message || "Falha na comunicação"}`);
         }
@@ -1014,6 +1013,11 @@ function MarketShopView({ accounts, sel, stats }: { accounts: AccountConfig[], s
       }
 
       setMassModal((prev) => prev ? { ...prev, current: prev.current + 1 } : prev);
+    });
+
+    for (let i = 0; i < tasks.length; i += 5) {
+      const chunk = tasks.slice(i, i + 5);
+      await Promise.all(chunk.map(t => t()));
     }
 
     if (!anyBought) {

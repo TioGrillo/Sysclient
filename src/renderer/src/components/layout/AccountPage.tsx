@@ -13,7 +13,7 @@ import { ShopPanel } from "../panels/ShopPanel";
 import { CaptureLogPanel } from "../panels/CaptureLogPanel";
 import { loadJSON } from "../../lib/dataLoader";
 import type { AccountConfig } from "../../types";
-import { Play, Box, Square, Settings, Target, Zap, Shield, ShoppingCart, Route, Trophy, Droplets, Sword, Heart, Clock, Star, CircleDot, BarChart3, Crown, Package, Store, Camera } from "lucide-react";
+import { Play, Box, Square, Settings, Target, Zap, Shield, ShoppingCart, Route, Trophy, Droplets, Sword, Heart, Clock, Star, CircleDot, BarChart3, Crown, Package, Store, Camera, Copy } from "lucide-react";
 
 interface Props {
   account: AccountConfig;
@@ -128,8 +128,22 @@ export function AccountPage({ account, onAccountUpdated, onOpenHuntSelector }: P
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] text-[rgb(var(--text-faint))] mb-1">Token JWT</label>
-                <div className="px-2 py-1.5 rounded bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[10px] text-[rgb(var(--text-muted))] font-mono truncate max-w-[200px]">
-                  {account.token ? account.token.substring(0, 30) + "..." : "(nao definido)"}
+                <div className="flex items-center gap-2">
+                  <div className="px-2 py-1.5 rounded bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[10px] text-[rgb(var(--text-muted))] font-mono truncate max-w-[200px] flex-1">
+                    {account.token ? account.token.substring(0, 30) + "..." : "(nao definido)"}
+                  </div>
+                  {account.token && (
+                    <button 
+                      onClick={() => {
+                        navigator.clipboard.writeText(account.token || "");
+                        alert("Token JWT copiado para a area de transferencia!");
+                      }}
+                      className="px-2 py-1.5 rounded-lg text-[11px] font-medium bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[rgb(var(--text-primary))] hover:border-[rgb(var(--accent))] hover:text-[rgb(var(--accent))] transition-colors"
+                      title="Copiar JWT"
+                    >
+                      <Copy size={12} />
+                    </button>
+                  )}
                 </div>
               </div>
               <div>
