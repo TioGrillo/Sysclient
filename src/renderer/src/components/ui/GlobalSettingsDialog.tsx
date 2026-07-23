@@ -45,9 +45,29 @@ export function GlobalSettingsDialog({ accounts, onImported, onClose, initialTab
   const [isTesting, setIsTesting] = useState(false);
 
   // JWT Renewal
-  const [jwtSelectedAccount, setJwtSelectedAccount] = useState<string>("");
-  const [jwtNewToken, setJwtNewToken] = useState<string>("");
-  const [jwtMsg, setJwtMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [jwtTokens, setJwtTokens] = useState<Record<string, string>>({});
+  const [jwtMsgMap, setJwtMsgMap] = useState<Record<string, { type: "ok" | "err"; text: string }>>({});
+
+  const handleUpdateJwt = async (accountName: string) => {
+    const token = jwtTokens[accountName];
+    if (!token || !token.trim()) {
+       setJwtMsgMap(p => ({ ...p, [accountName]: { type: "err", text: "Token vazio" } }));
+       return;
+    }
+    const updated = accounts.map(a => a.name === accountName ? { ...a, token: token.trim() } : a);
+    await invoke("accounts:save", updated);
+    onImported(updated);
+    setJwtMsgMap(p => ({ ...p, [accountName]: { type: "ok", text: "Atualizado!" } }));
+    setJwtTokens(p => ({ ...p, [accountName]: "" }));
+    
+    setTimeout(() => {
+      setJwtMsgMap(p => {
+        const next = { ...p };
+        delete next[accountName];
+        return next;
+      });
+    }, 3000);
+  };
 
   useEffect(() => {
     invoke<any>("settings:get").then((s) => {
@@ -315,55 +335,44 @@ export function GlobalSettingsDialog({ accounts, onImported, onClose, initialTab
 
           {tab === "jwt" && (
             <div className="space-y-4">
-              <p className="text-[12px] text-[rgb(var(--text-muted))]">Atualize o token JWT de uma conta especifica para renovar sua sessao sem precisar remover e adicionar novamente.</p>
+              <p className="text-[12px] text-[rgb(var(--text-muted))]">Atualize os tokens de forma rápida. Cole o novo token ao lado da conta desejada e clique em Salvar.</p>
               
-              <div>
-                <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Conta</label>
-                <select 
-                  value={jwtSelectedAccount} 
-                  onChange={(e) => setJwtSelectedAccount(e.target.value)}
-                  className="w-full px-2 py-1.5 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))]"
-                >
-                  <option value="">Selecione uma conta...</option>
-                  {accounts.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
-                </select>
+              <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
+                {accounts.map(a => {
+                  const msg = jwtMsgMap[a.name];
+                  return (
+                    <div key={a.name} className="flex items-center gap-2 p-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))]">
+                      <div className="w-[100px] shrink-0 truncate text-[12px] font-medium text-[rgb(var(--text-primary))]" title={a.name}>
+                        {a.name}
+                      </div>
+                      <div className="flex-1 relative min-w-0">
+                        <input
+                          type="text"
+                          value={jwtTokens[a.name] || ""}
+                          onChange={(e) => setJwtTokens(p => ({ ...p, [a.name]: e.target.value }))}
+                          placeholder="Cole o novo JWT aqui..."
+                          className="w-full px-2 py-1.5 rounded-md bg-[rgb(var(--bg-base))] border border-[rgb(var(--border))] text-[11px] text-[rgb(var(--text-primary))] font-mono focus:outline-none focus:border-[rgb(var(--accent))] transition-colors"
+                        />
+                      </div>
+                      <button
+                        onClick={() => handleUpdateJwt(a.name)}
+                        disabled={!(jwtTokens[a.name] && jwtTokens[a.name].trim())}
+                        className="shrink-0 px-3 py-1.5 rounded-md text-[11px] font-medium bg-[rgb(var(--accent))]/15 text-[rgb(var(--accent))] hover:bg-[rgb(var(--accent))]/25 disabled:opacity-40 transition-colors"
+                      >
+                        Salvar
+                      </button>
+                      {msg && (
+                        <div className={`shrink-0 w-16 text-center text-[10px] font-medium ${msg.type === "ok" ? "text-green-400" : "text-red-400"}`}>
+                          {msg.text}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {accounts.length === 0 && (
+                  <div className="text-[12px] text-[rgb(var(--text-faint))] text-center py-4">Nenhuma conta cadastrada.</div>
+                )}
               </div>
-
-              <div>
-                <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Novo Token JWT</label>
-                <textarea 
-                  value={jwtNewToken}
-                  onChange={(e) => setJwtNewToken(e.target.value)}
-                  placeholder="Cole o novo token JWT aqui..."
-                  className="w-full h-24 px-3 py-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))] transition-colors resize-none font-mono"
-                />
-              </div>
-
-              <div className="flex justify-end gap-3">
-                <button 
-                  onClick={async () => {
-                    if (!jwtSelectedAccount || !jwtNewToken.trim()) {
-                      setJwtMsg({ type: "err", text: "Selecione uma conta e insira um token." });
-                      return;
-                    }
-                    const updated = accounts.map(a => a.name === jwtSelectedAccount ? { ...a, token: jwtNewToken.trim() } : a);
-                    await invoke("accounts:save", updated);
-                    onImported(updated);
-                    setJwtMsg({ type: "ok", text: "Token atualizado! Reconecte a conta (Start) para aplicar." });
-                    setJwtNewToken("");
-                  }}
-                  disabled={!jwtSelectedAccount || !jwtNewToken.trim()}
-                  className="px-4 py-2 rounded-lg text-[12px] font-medium bg-[rgb(var(--accent))]/15 text-[rgb(var(--accent))] hover:bg-[rgb(var(--accent))]/25 disabled:opacity-40 transition-colors"
-                >
-                  Atualizar Token
-                </button>
-              </div>
-
-              {jwtMsg && (
-                <div className={`px-3 py-2 rounded text-[12px] ${jwtMsg.type === "ok" ? "bg-green-600/20 text-green-400" : "bg-red-600/20 text-red-400"}`}>
-                  {jwtMsg.text}
-                </div>
-              )}
             </div>
           )}
 
