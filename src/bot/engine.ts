@@ -539,9 +539,21 @@ export class BotSession extends EventEmitter {
         break;
       }
 
-      case "balls":
-        this.ballCounts = msg.counts || {};
+      case "balls": {
+        const counts = msg.counts || msg.list || msg.balls;
+        if (Array.isArray(counts)) {
+          const newCounts: Record<string, number> = {};
+          for (const b of counts) {
+            if (b.id !== undefined && (b.quantity !== undefined || b.count !== undefined)) {
+              newCounts[String(b.id)] = b.quantity ?? b.count;
+            }
+          }
+          this.ballCounts = newCounts;
+        } else if (typeof counts === "object") {
+          this.ballCounts = counts;
+        }
         break;
+      }
 
       case "field-teleport-city":
         this.warn("Heroi desmaiou! Teleportado para cidade.");
