@@ -337,7 +337,7 @@ export function GlobalSettingsDialog({ accounts, onImported, onClose, initialTab
               
               <div>
                 <h2 className="text-xl font-bold text-[rgb(var(--text-primary))] tracking-wide">POKE IDLE BOT</h2>
-                <div className="text-[13px] text-[rgb(var(--accent))] mt-1 font-medium">Versao 4.3.11</div>
+                <div className="text-[13px] text-[rgb(var(--accent))] mt-1 font-medium">Versao 4.3.12</div>
               </div>
 
               <p className="text-[12px] text-[rgb(var(--text-muted))] max-w-[320px] leading-relaxed">

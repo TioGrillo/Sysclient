@@ -261,7 +261,7 @@ export function LoginPage({ onAuthenticated }: LoginPageProps) {
           </div>
 
           <div className="pb-4 text-center">
-            <span className="text-[10px] text-[rgb(var(--text-faint))]">PokeIdleBot v4.3.11</span>
+            <span className="text-[10px] text-[rgb(var(--text-faint))]">PokeIdleBot v4.3.12</span>
           </div>
         </div>
       </div>

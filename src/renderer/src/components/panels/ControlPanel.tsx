@@ -1205,9 +1205,12 @@ const TYPE_PT: Record<string, string> = {
 function MassSellPokemonTab({ accounts, sel }: { accounts: AccountConfig[], sel: Set<string> }) {
   const [types, setTypes] = useState<string[]>([]);
   const [rarities, setRarities] = useState<string[]>([]);
+  const [useMaxIv, setUseMaxIv] = useState(false);
+  const [useMaxQuality, setUseMaxQuality] = useState(false);
+  const [useMaxScore, setUseMaxScore] = useState(false);
   const [maxIv, setMaxIv] = useState<number>(100);
-  const [maxQuality, setMaxQuality] = useState<number>(3);
-  const [maxScore, setMaxScore] = useState<number>(1000000);
+  const [maxQuality, setMaxQuality] = useState<number>(1.4);
+  const [maxScore, setMaxScore] = useState<number>(150);
   const [keepShiny, setKeepShiny] = useState(true);
   const [keepLegendary, setKeepLegendary] = useState(true);
 
@@ -1303,13 +1306,13 @@ function MassSellPokemonTab({ accounts, sel }: { accounts: AccountConfig[], sel:
             }
 
             const pIv = p.ivTotal ?? 0;
-            if (pIv > maxIv) continue;
+            if (useMaxIv && pIv > maxIv) continue;
 
             const pQ = p.quality ?? 0;
-            if (pQ > maxQuality) continue;
+            if (useMaxQuality && pQ > maxQuality) continue;
 
             const pScore = p.score ?? 0;
-            if (pScore > maxScore) continue;
+            if (useMaxScore && pScore > maxScore) continue;
 
             toSell.push(p.id);
           }
@@ -1368,15 +1371,30 @@ function MassSellPokemonTab({ accounts, sel }: { accounts: AccountConfig[], sel:
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Field label="IV Max (Vende <= X)">
-            <input type="number" min="0" max="192" value={maxIv} onChange={e => setMaxIv(Number(e.target.value))} className={inputCls} />
-          </Field>
-          <Field label="Qualidade Max">
-            <input type="number" min="0" max="10" step="0.1" value={maxQuality} onChange={e => setMaxQuality(Number(e.target.value))} className={inputCls} />
-          </Field>
-          <Field label="Score Max">
-            <input type="number" min="0" value={maxScore} onChange={e => setMaxScore(Number(e.target.value))} className={inputCls} />
-          </Field>
+          <div className="space-y-1">
+            <Toggle label="Limitar por IV" checked={useMaxIv} onChange={setUseMaxIv} />
+            {useMaxIv && (
+              <Field label="IV Max (Vende <= X)">
+                <input type="number" min="0" max="192" value={maxIv} onChange={e => setMaxIv(Number(e.target.value))} className={inputCls} />
+              </Field>
+            )}
+          </div>
+          <div className="space-y-1">
+            <Toggle label="Limitar por Qualidade" checked={useMaxQuality} onChange={setUseMaxQuality} />
+            {useMaxQuality && (
+              <Field label="Qualidade Max">
+                <input type="number" min="0" max="10" step="0.1" value={maxQuality} onChange={e => setMaxQuality(Number(e.target.value))} className={inputCls} />
+              </Field>
+            )}
+          </div>
+          <div className="space-y-1">
+            <Toggle label="Limitar por Score" checked={useMaxScore} onChange={setUseMaxScore} />
+            {useMaxScore && (
+              <Field label="Score Max">
+                <input type="number" min="0" value={maxScore} onChange={e => setMaxScore(Number(e.target.value))} className={inputCls} />
+              </Field>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3 pt-2">
