@@ -45,6 +45,7 @@ function queueEvent(type: "log" | "stats" | "capture-log", data: any) {
 interface AppState {
   accounts: AccountConfig[];
   mountedRoutes: Record<string, any>;
+  regbotHistory: any[];
   settings: {
     theme: string;
     language: string;
@@ -61,6 +62,7 @@ const store = new Store<AppState>({
   defaults: {
     accounts: [],
     mountedRoutes: {},
+    regbotHistory: [],
     settings: { theme: "dark-amber", language: "pt-BR", autoStart: false },
     auth: { authenticated: false, savedUser: "", savedPass: "" },
   },
@@ -527,6 +529,83 @@ function registerHandlers(): void {
   ipcMain.handle("bot:toggle-lock-pokemon", (_, name: string, capturedId: string) => {
     const s = sessions.get(name);
     return s ? s.lockPokemon(capturedId, true) : null;
+  });
+
+  // ── RegisterBot: persistent account registration history ────────────────
+  ipcMain.handle("regbot:history-get", () => {
+    return store.get("regbotHistory", []);
+  });
+
+  ipcMain.handle("regbot:history-save", (_, history: any[]) => {
+    store.set("regbotHistory", history);
+    return true;
+  });
+
+  // Register a new game account and immediately login to get the JWT token
+  ipcMain.handle("regbot:register", async (_, { login, password, nick, trainerName }: {
+    login: string; password: string; nick: string; trainerName: string;
+  }) => {
+    const BASE = "https://poke.idleworld.online";
+    try {
+      // Step 1: Register
+      const regRes = await fetch(`${BASE}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: login, password, username: nick, trainerName: trainerName || nick }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const regBody = await regRes.text();
+      let regData: any = {};
+      try { regData = JSON.parse(regBody); } catch {}
+
+      // If registration succeeded or account already exists, try to login
+      if (!regRes.ok && !regBody.toLowerCase().includes("already") && !regBody.toLowerCase().includes("exist") && !regBody.toLowerCase().includes("cadastr")) {
+        return { success: false, message: `Registro falhou (${regRes.status}): ${regBody.slice(0, 200)}` };
+      }
+
+      // Step 2: Login to get JWT
+      const loginRes = await fetch(`${BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: login, password }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const loginBody = await loginRes.text();
+      let loginData: any = {};
+      try { loginData = JSON.parse(loginBody); } catch {}
+
+      const token = loginData.token || loginData.accessToken || loginData.access_token || loginData.jwt || "";
+      if (!token) {
+        return { success: false, message: `Login falhou após registro (${loginRes.status}): ${loginBody.slice(0, 200)}` };
+      }
+      return { success: true, token };
+    } catch (e: any) {
+      return { success: false, message: e.message || "Erro de rede" };
+    }
+  });
+
+  // Login to an existing game account to refresh JWT token
+  ipcMain.handle("regbot:login", async (_, { login, password }: { login: string; password: string }) => {
+    const BASE = "https://poke.idleworld.online";
+    try {
+      const res = await fetch(`${BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: login, password }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const body = await res.text();
+      let data: any = {};
+      try { data = JSON.parse(body); } catch {}
+
+      const token = data.token || data.accessToken || data.access_token || data.jwt || "";
+      if (!res.ok || !token) {
+        return { success: false, message: data.message || data.error || `HTTP ${res.status}: ${body.slice(0, 200)}` };
+      }
+      return { success: true, token };
+    } catch (e: any) {
+      return { success: false, message: e.message || "Erro de rede" };
+    }
   });
 }
 

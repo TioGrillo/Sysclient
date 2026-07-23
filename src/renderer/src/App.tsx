@@ -10,13 +10,14 @@ import { MassAddDialog } from "./components/ui/MassAddDialog";
 import { HuntSelector } from "./components/ui/HuntSelector";
 import { GlobalSettingsDialog } from "./components/ui/GlobalSettingsDialog";
 import { LoginPage } from "./components/login/LoginPage";
+import { RegisterBot } from "./components/panels/RegisterBot";
 import { useBotStore } from "./stores/botStore";
 import { invoke } from "./lib/ipc";
 import { THEMES, applyTheme, applyCustomAccent } from "./lib/themes";
 import { getRarity } from "./lib/rarity";
 import type { AccountConfig, BotStats, LogEntry } from "./types";
 import { PokedexPanel } from "./components/panels/PokedexPanel";
-import { Gamepad2, BarChart3, ScrollText, SlidersHorizontal, BookOpen } from "lucide-react";
+import { Gamepad2, BarChart3, ScrollText, SlidersHorizontal, BookOpen, UserPlus } from "lucide-react";
 
 interface HuntEntry {
   name: string;
@@ -25,7 +26,7 @@ interface HuntEntry {
   maxLevel: number;
 }
 
-type MainTab = "conta" | "global" | "log" | "control" | "pokedex";
+type MainTab = "conta" | "global" | "log" | "control" | "pokedex" | "registro";
 
 export function App() {
   const [authenticated, setAuthenticated] = useState(false);
@@ -278,6 +279,9 @@ export function App() {
             <TabBtn active={mainTab === "pokedex"} onClick={() => setMainTab("pokedex")} icon={<BookOpen size={13} />}>
               Pokedex
             </TabBtn>
+            <TabBtn active={mainTab === "registro"} onClick={() => setMainTab("registro")} icon={<UserPlus size={13} />}>
+              Registro
+            </TabBtn>
           </div>
           <main className="flex-1 overflow-hidden flex flex-col relative">
             {mainTab === "conta" && activeAccount && (
@@ -287,6 +291,9 @@ export function App() {
             {mainTab === "log" && <LogPanel />}
             {mainTab === "control" && <ControlPanel accounts={accounts} hunts={hunts} />}
             {mainTab === "pokedex" && <PokedexPanel accounts={accounts} />}
+            {mainTab === "registro" && (
+              <RegisterBot onAccountsChanged={() => invoke<AccountConfig[]>("accounts:list").then((accs) => setAccounts(accs || []))} />
+            )}
           </main>
         </div>
       </div>
