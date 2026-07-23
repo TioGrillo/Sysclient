@@ -253,7 +253,8 @@ export function AccountPage({ account, onAccountUpdated, onOpenHuntSelector }: P
                   <MiniStat icon={<Star size={11} />} label="Shiny" value={String(s.shiny || 0)} color="text-yellow-400" />
                   <MiniStat icon={<Trophy size={11} />} label="Gold" value={formatNumber(s.gold || 0)} sub={`${s.gph || 0}/h`} />
                   
-                  <MiniStat icon={<Zap size={11} />} label="XP" value={formatNumber(s.xp || 0)} sub={`${s.xph || 0}/h`} color="text-purple-400" />
+                  <MiniStat icon={<Zap size={11} />} label="XP (Hunt)" value={formatNumber(s.xp || 0)} sub={`${s.xph || 0}/h`} color="text-purple-400" />
+                  <MiniStat icon={<Zap size={11} />} label="XP Soneca" value={formatNumber(s.passiveXp || 0)} color="text-indigo-400" />
                   <MiniStat icon={<Clock size={11} />} label="Uptime" value={formatUptime(s.uptime || 0)} color="text-slate-400" />
                   <MiniStat icon={<Heart size={11} />} label="HP" value={`${s.heroHp || 0}/${s.heroMaxHp || 1}`} />
                   <MiniStat icon={<Droplets size={11} />} label="Bolas" value={String(s.ballsUsed || 0)} color="text-blue-300" />

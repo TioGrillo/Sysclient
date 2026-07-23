@@ -143,6 +143,12 @@ export class BotSession extends EventEmitter {
   stats(): BotStats {
     const uptime = Math.floor((Date.now() - this.sessionStart) / 1000);
     const hours = uptime / 3600 || 1;
+    let passiveXp = 0;
+    if (this._startXp !== null) {
+      passiveXp = (this.xp - this._startXp) - this._sessionXp;
+      if (passiveXp < 0) passiveXp = 0;
+    }
+
     return {
       kills: this.kills, captures: this.captures, shiny: this.shiny,
       xp: this.xp, gold: this.gold,
@@ -151,7 +157,8 @@ export class BotSession extends EventEmitter {
       inHunt: this.inHunt, huntSlug: this.huntSlug,
       uptime, kph: Math.round(this.kills / hours),
       gph: Math.round(this.lootGold / hours),
-      xph: Math.round(this.xp / hours),
+      xph: Math.round((this._sessionXp + passiveXp) / hours),
+      passiveXp,
       lootGold: this.lootGold, supplyGold: this.supplyGold,
       ballsUsed: this.ballsUsed, ballCounts: { ...this.ballCounts },
       lootDrops: { ...this.lootDrops },
@@ -464,7 +471,12 @@ export class BotSession extends EventEmitter {
           this.heroHp = leader.hp || 0;
           this.heroMaxHp = leader.maxHp || 1;
           if (leader.level) this.heroLevel = leader.level;
-          if (leader.xp !== undefined) this.xp = leader.xp;
+          if (leader.xp !== undefined) {
+            this.xp = leader.xp;
+            if (this._startXp === null) {
+              this._startXp = leader.xp;
+            }
+          }
         } else {
           this.equipBestPokemon();
         }

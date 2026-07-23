@@ -85,6 +85,7 @@ export interface BotStats {
   kph: number;
   gph: number;
   xph: number;
+  passiveXp?: number;
   lootGold: number;
   supplyGold: number;
   ballsUsed: number;

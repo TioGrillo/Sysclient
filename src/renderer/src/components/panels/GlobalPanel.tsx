@@ -12,8 +12,8 @@ export function GlobalPanel({ accounts }: Props) {
   const total = Object.values(stats).reduce((a, s) => ({
     kills: a.kills + (s.kills || 0), captures: a.captures + (s.captures || 0),
     shiny: a.shiny + (s.shiny || 0), xp: a.xp + (s.xp || 0), gold: a.gold + (s.gold || 0),
-    kph: a.kph + (s.kph || 0), gph: a.gph + (s.gph || 0), xph: a.xph + (s.xph || 0),
-  }), { kills: 0, captures: 0, shiny: 0, xp: 0, gold: 0, kph: 0, gph: 0, xph: 0 });
+    kph: a.kph + (s.kph || 0), gph: a.gph + (s.gph || 0), xph: a.xph + (s.xph || 0), passiveXp: a.passiveXp + (s.passiveXp || 0),
+  }), { kills: 0, captures: 0, shiny: 0, xp: 0, gold: 0, kph: 0, gph: 0, xph: 0, passiveXp: 0 });
 
   const connectedCount = Object.values(stats).filter((s) => s.connected).length;
 
@@ -33,6 +33,7 @@ export function GlobalPanel({ accounts }: Props) {
         <Card icon={<Swords size={14} />} label="Kills/h" value={formatNumber(total.kph)} color="text-red-400" />
         <Card icon={<Coins size={14} />} label="Gold/h (Total)" value={formatNumber(total.gph)} sub={connectedCount > 0 ? `Média: ${formatNumber(Math.round(total.gph / connectedCount))}/h` : "Média: 0/h"} color="text-emerald-400" />
         <Card icon={<Zap size={14} />} label="XP/h (Total)" value={formatNumber(total.xph)} sub={connectedCount > 0 ? `Média: ${formatNumber(Math.round(total.xph / connectedCount))}/h` : "Média: 0/h"} color="text-cyan-400" />
+        <Card icon={<Zap size={14} />} label="XP Soneca Total" value={formatNumber(total.passiveXp)} color="text-indigo-400" />
       </div>
 
       <div className="bg-[rgb(var(--bg-base))] border border-[rgb(var(--border))] rounded-lg overflow-hidden">

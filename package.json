@@ -1,6 +1,6 @@
-{
-  "name": "pokeidlebot-web",
-  "version": "4.3.16",
+{  "name": "pokeidlebot-web",
+  "version": "4.3.17",
+  "description": "PokeIdle Bot com UI React/Tailwind",
   "description": "PokeIdleBot Web Version + React",
   "main": "dist/main/index.js",
   "author": {

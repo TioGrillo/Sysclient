@@ -19,8 +19,9 @@ export function Dashboard({ accounts }: DashboardProps) {
       kph: acc.kph + (s.kph || 0),
       gph: acc.gph + (s.gph || 0),
       xph: acc.xph + (s.xph || 0),
+      passiveXp: acc.passiveXp + (s.passiveXp || 0),
     }),
-    { kills: 0, captures: 0, shiny: 0, xp: 0, gold: 0, kph: 0, gph: 0, xph: 0 }
+    { kills: 0, captures: 0, shiny: 0, xp: 0, gold: 0, kph: 0, gph: 0, xph: 0, passiveXp: 0 }
   );
 
   const connectedCount = Object.values(stats).filter((s) => s.connected).length;
@@ -38,8 +39,9 @@ export function Dashboard({ accounts }: DashboardProps) {
         <StatCard label="Kills" value={formatNumber(totalStats.kills)} sub={`${formatNumber(totalStats.kph)}/h`} color="text-red-400" />
         <StatCard label="Capturas" value={formatNumber(totalStats.captures)} color="text-blue-400" />
         <StatCard label="Shiny" value={formatNumber(totalStats.shiny)} color="text-yellow-400" />
-        <StatCard label="Gold" value={formatNumber(totalStats.gold)} sub={`${formatNumber(totalStats.gph)}/h`} color="text-amber-400" />
+        <StatCard label="Ouro Total" value={formatNumber(totalStats.gold)} sub={`${formatNumber(totalStats.gph)}/h`} color="text-amber-400" />
         <StatCard label="XP Total" value={formatNumber(totalStats.xp)} sub={`${formatNumber(totalStats.xph)}/h`} color="text-purple-400" />
+        <StatCard label="XP Soneca" value={formatNumber(totalStats.passiveXp)} color="text-indigo-400" />
         <StatCard label="Kills/h" value={formatNumber(totalStats.kph)} color="text-orange-400" />
         <StatCard label="Gold/h" value={formatNumber(totalStats.gph)} color="text-emerald-400" />
         <StatCard label="XP/h" value={formatNumber(totalStats.xph)} color="text-cyan-400" />
