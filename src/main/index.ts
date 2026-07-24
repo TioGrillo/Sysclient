@@ -618,7 +618,11 @@ function registerHandlers(): void {
         (info) => {
           // Push progress events to renderer
           if (!event.sender.isDestroyed()) {
-            event.sender.send("regbot:progress", info);
+            try {
+              event.sender.send("regbot:progress", info);
+            } catch (e) {
+              // Ignore disposed frame errors
+            }
           }
         },
         mainWindow?.id
@@ -644,7 +648,11 @@ function registerHandlers(): void {
         delayMs,
         (info) => {
           if (!event.sender.isDestroyed()) {
-            event.sender.send("regbot:progress", info);
+            try {
+              event.sender.send("regbot:progress", info);
+            } catch (e) {
+              // Ignore disposed frame errors
+            }
           }
         },
         mainWindow?.id

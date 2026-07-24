@@ -37,6 +37,7 @@ export function Sidebar({ accounts, selectedAccount, mainTab, onSelectAccount, o
   const prevLevels = useRef<Record<string, number>>({});
   const [levelUpMap, setLevelUpMap] = useState<Record<string, boolean>>({});
   const [searchTerm, setSearchTerm] = useState("");
+  const [sortAlpha, setSortAlpha] = useState(false);
 
   useEffect(() => {
     loadJSON<Record<string, number>>("slug_to_dex.json").then(setDexMap);
@@ -91,8 +92,8 @@ export function Sidebar({ accounts, selectedAccount, mainTab, onSelectAccount, o
         <span className="text-green-400">{connectedCount} ativa(s)</span>
       </div>
 
-      <div className="px-2 pb-2">
-        <div className="relative">
+      <div className="px-2 pb-2 flex gap-1">
+        <div className="relative flex-1">
           <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-[rgb(var(--text-faint))]" />
           <input
             type="text"
@@ -102,10 +103,20 @@ export function Sidebar({ accounts, selectedAccount, mainTab, onSelectAccount, o
             className="w-full pl-6 pr-2 py-1.5 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[11px] text-[rgb(var(--text-primary))] placeholder-[rgb(var(--text-faint))] focus:outline-none focus:border-[rgb(var(--accent))] transition-colors"
           />
         </div>
+        <button
+          onClick={() => setSortAlpha(!sortAlpha)}
+          className={cn("p-1.5 rounded border transition-colors flex items-center justify-center shrink-0", sortAlpha ? "bg-[rgb(var(--accent))]/20 border-[rgb(var(--accent))]/50 text-[rgb(var(--accent))]" : "bg-[rgb(var(--bg-surface))] border-[rgb(var(--border))] text-[rgb(var(--text-muted))] hover:bg-[rgb(var(--bg-surface))]/80")}
+          title="Ordenar A-Z"
+        >
+          <span className="text-[10px] font-bold">A-Z</span>
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto">
-        {accounts.filter(a => a.name.toLowerCase().includes(searchTerm.toLowerCase())).map((acc) => {
+        {accounts
+          .filter(a => a.name.toLowerCase().includes(searchTerm.toLowerCase()))
+          .sort((a, b) => sortAlpha ? a.name.localeCompare(b.name) : 0)
+          .map((acc) => {
           const s = stats[acc.name];
           const isConnected = s?.connected;
           const isSelected = mainTab === "conta" && selectedAccount === acc.name;

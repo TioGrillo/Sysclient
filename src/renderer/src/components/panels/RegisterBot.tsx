@@ -366,20 +366,20 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
     const entry = history.find((h) => h.id === id);
     if (!entry) return;
     
-    setIsRunning(true);
-    setRunLog([]);
-    setProgress({ current: 0, total: 1 });
-    pushLog(`Iniciando navegador para renovar token de [${entry.nick}]...`, "info");
+    // Do not set isRunning(true) so we can run multiple
+    setRunLog((prev) => [...prev, { msg: `Iniciando navegador para renovar token de [${entry.nick}]...`, type: "info" }]);
 
     const updated = history.map((h) => h.id === id ? { ...h, status: "refreshing" as const } : h);
     setHistory(updated);
 
     const unsubProgress = on("regbot:progress", (info: unknown) => {
       const prog = info as BrowserProgress;
+      if (prog.nick !== entry.nick) return; // Ignore events from other concurrent refreshes
+      
       const prefix = `[1/1] [${prog.nick}]`;
       const isErr = prog.action.startsWith("✗") || prog.action.startsWith("ERRO");
       const isOk = prog.action.startsWith("✓");
-      pushLog(`${prefix} ${prog.action}`, isOk ? "ok" : isErr ? "err" : "info");
+      setRunLog((prev) => [...prev, { msg: `${prefix} ${prog.action}`, type: isOk ? "ok" : isErr ? "err" : "info" }]);
 
       if (prog.result) {
         const r = prog.result;
@@ -417,7 +417,6 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
       pushLog(`✗ Exceção: ${e.message}`, "err");
     } finally {
       unsubProgress();
-      setIsRunning(false);
     }
   }
 
@@ -869,7 +868,7 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => refreshTokenApi(entry.id)}
-                      disabled={isRunning || entry.status === "refreshing"}
+                      disabled={entry.status === "refreshing"}
                       title="Renovar Token (API rápida)"
                       className="p-1.5 rounded hover:bg-blue-600/20 text-blue-400 disabled:opacity-40 transition-colors"
                     >
