@@ -6,6 +6,7 @@ import { autoUpdater } from "electron-updater";
 import { BotSession, AccountConfig } from "../bot/engine";
 import { kaLogin, kaRegister, kaUpgrade } from "./auth";
 import { ProxyAgent, fetch } from "undici";
+import { runBrowserRegistration, runBrowserLoginOnly, type RegJob } from "./regbot-browser";
 
 let mainWindow: BrowserWindow | null = null;
 const sessions = new Map<string, BotSession>();
@@ -607,7 +608,57 @@ function registerHandlers(): void {
       return { success: false, message: e.message || "Erro de rede" };
     }
   });
+
+  // ── Browser-based registration (opens real BrowserWindow) ───────────────
+  ipcMain.handle("regbot:run-browser", async (event, { config, delayMs }: { config: any; delayMs: number }) => {
+    try {
+      const results = await runBrowserRegistration(
+        config,
+        delayMs,
+        (info) => {
+          // Push progress events to renderer
+          if (!event.sender.isDestroyed()) {
+            event.sender.send("regbot:progress", info);
+          }
+        },
+        mainWindow?.id
+      );
+      return { success: true, results };
+    } catch (e: any) {
+      return { success: false, message: e.message || "Erro ao iniciar navegador", results: [] };
+    }
+  });
+
+  // ── Browser-based login (token refresh via BrowserWindow) ───────────────
+  ipcMain.handle("regbot:login-browser", async (event, { accounts, delayMs }: {
+    accounts: Array<{ login: string; password: string; nick: string; trainerName: string }>;
+    delayMs: number;
+  }) => {
+    try {
+      // Re-use runBrowserRegistration but skip the register step — just do login
+      const loginJobs: RegJob[] = accounts.map(a => ({
+        login: a.login, password: a.password, nick: a.nick, trainerName: a.trainerName,
+      }));
+      const results = await runBrowserLoginOnly(
+        loginJobs,
+        delayMs,
+        (info) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send("regbot:progress", info);
+          }
+        },
+        mainWindow?.id
+      );
+      return { success: true, results };
+    } catch (e: any) {
+      return { success: false, message: e.message || "Erro ao iniciar navegador", results: [] };
+    }
+  });
 }
+
+// Disable automation flags so Cloudflare Turnstile doesn't detect Electron
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+app.commandLine.appendSwitch('disable-features', 'AutomationControlledEnabled');
 
 app.whenReady().then(() => {
   autoUpdater.checkForUpdatesAndNotify();

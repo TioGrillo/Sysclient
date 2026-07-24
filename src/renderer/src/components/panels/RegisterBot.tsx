@@ -1,14 +1,14 @@
-import { useState, useEffect, useCallback } from "react";
-import { invoke } from "../../lib/ipc";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { invoke, on } from "../../lib/ipc";
 import { createDefaultAccount } from "../../types";
 import {
   UserPlus, RefreshCw, Trash2, Eye, EyeOff, CheckCircle2,
-  XCircle, Clock, Download, ChevronDown, ChevronUp, Key, Search, Filter
+  XCircle, Clock, Download, ChevronDown, ChevronUp, Key, Search, Filter, Globe, Edit2, X
 } from "lucide-react";
 
-// ──────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
 // Types
-// ──────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
 export interface RegisteredAccount {
   id: string;
   login: string;
@@ -21,28 +21,51 @@ export interface RegisteredAccount {
   status: "ok" | "error" | "pending" | "refreshing";
   errorMsg?: string;
   addedToBot: boolean;
+  restoreKey?: string;
+  starterId?: number;
+  gender?: string;
 }
 
-interface RegisterJob {
-  login: string;
+interface RegisterConfig {
+  count: number;
   password: string;
+  prefix: string;
+  usePrefix: boolean;
+  avoidNumbers: boolean;
+  starterId: number;
+  gender: string;
+}
+
+interface BrowserProgress {
+  current: number;
+  total: number;
   nick: string;
-  trainerName: string;
+  action: string;
+  result?: {
+    login: string;
+    nick: string;
+    success: boolean;
+    token: string;
+    message: string;
+  };
 }
 
 type SortKey = "registeredAt" | "nick" | "status" | "lastLoginAt";
 type FilterStatus = "all" | "ok" | "error" | "pending";
 
-// ──────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
 // Helpers
-// ──────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
 function fmtDate(ts?: number) {
   if (!ts) return "-";
-  return new Date(ts).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return new Date(ts).toLocaleString("pt-BR", {
+    day: "2-digit", month: "2-digit", year: "2-digit",
+    hour: "2-digit", minute: "2-digit"
+  });
 }
 
 function maskToken(t: string) {
@@ -50,24 +73,62 @@ function maskToken(t: string) {
   return t.slice(0, 12) + "..." + t.slice(-8);
 }
 
-// ──────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
 // Component
-// ──────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
 export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => void }) {
   const [history, setHistory] = useState<RegisteredAccount[]>([]);
 
-  // ── Mass register form
-  const [bulkText, setBulkText] = useState("");
-  const [bulkFormat, setBulkFormat] = useState<"nick:login:pass" | "login:pass:nick" | "nick:login:pass:trainer">("nick:login:pass");
-  const [defaultTrainer, setDefaultTrainer] = useState("");
-  const [delayMs, setDelayMs] = useState(1500);
+  // ── Form
+  const [genCount, setGenCount] = useState(Number(localStorage.getItem("rb_count")) || 1);
+  const [genPassword, setGenPassword] = useState(localStorage.getItem("rb_pass") || "Vd522431");
+  const [genPrefix, setGenPrefix] = useState(localStorage.getItem("rb_prefix") || "Player");
+  const [usePrefix, setUsePrefix] = useState(localStorage.getItem("rb_usePrefix") !== "false");
+  const [avoidNumbers, setAvoidNumbers] = useState(localStorage.getItem("rb_avoidNum") === "true");
+  const [genStarter, setGenStarter] = useState(localStorage.getItem("rb_starter") || "7");
+  const [genGender, setGenGender] = useState(localStorage.getItem("rb_gender") || "random");
+  const [delayMs, setDelayMs] = useState(Number(localStorage.getItem("rb_delay")) || 2000);
   const [isRunning, setIsRunning] = useState(false);
+  const [config, setConfig] = useState<RegisterConfig>({
+    count: 1,
+    password: "",
+    prefix: "",
+    usePrefix: false,
+    avoidNumbers: false,
+    starterId: 7,
+    gender: "random"
+  });
+
+  const [editingEntry, setEditingEntry] = useState<RegisteredAccount | null>(null);
+  const [editLogin, setEditLogin] = useState("");
+  const [editNick, setEditNick] = useState("");
+
+  function openEditModal(entry: RegisteredAccount) {
+    setEditingEntry(entry);
+    setEditLogin(entry.login);
+    setEditNick(entry.nick);
+  }
+
+  function saveEdit() {
+    if (!editingEntry) return;
+    setHistory((prev) => {
+      const next = prev.map((h) =>
+        h.id === editingEntry.id ? { ...h, login: editLogin, nick: editNick, trainerName: editNick } : h
+      );
+      invoke("regbot:history-save", next);
+      return next;
+    });
+    setEditingEntry(null);
+  }; 
   const [runLog, setRunLog] = useState<{ msg: string; type: "ok" | "err" | "info" }[]>([]);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const logEndRef = useRef<HTMLDivElement>(null);
 
   // ── UI state
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
   const [showTokens, setShowTokens] = useState<Record<string, boolean>>({});
+  const [showRestoreKeys, setShowRestoreKeys] = useState<Record<string, boolean>>({});
+  const [showGenPassword, setShowGenPassword] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("registeredAt");
   const [sortAsc, setSortAsc] = useState(false);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
@@ -76,10 +137,59 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
 
   // Load history on mount
   useEffect(() => {
-    invoke<RegisteredAccount[]>("regbot:history-get").then((h) => {
-      if (Array.isArray(h)) setHistory(h);
+    // FIX SCRIPT: arrumar emails das contas importadas
+    invoke("regbot:history-get").then((h: any[]) => {
+      if (!Array.isArray(h)) return;
+      let changed = false;
+      const next = [...h];
+      for (const a of next) {
+        if (a.login === "snipermage92459901@uorak.com" && a.nick !== "snipermage92459901") {
+          a.login = a.nick + "@uorak.com";
+          changed = true;
+        }
+      }
+      if (changed) {
+        invoke("regbot:history-save", next).then(() => {
+          setHistory(next);
+        });
+      } else {
+        setHistory(next);
+      }
+    });
+
+    invoke("accounts:list").then((accs: any[]) => {
+      if (Array.isArray(accs)) {
+        let changed = false;
+        const next = [...accs];
+        for (const a of next) {
+          if (a.email === "snipermage92459901@uorak.com" && a.name !== "snipermage92459901") {
+            a.email = a.name + "@uorak.com";
+            changed = true;
+          }
+        }
+        if (changed) {
+          invoke("accounts:save", next);
+        }
+      }
     });
   }, []);
+
+  // Auto scroll log
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [runLog]);
+
+  // Persist settings
+  useEffect(() => {
+    localStorage.setItem("rb_count", String(genCount));
+    localStorage.setItem("rb_pass", genPassword);
+    localStorage.setItem("rb_prefix", genPrefix);
+    localStorage.setItem("rb_usePrefix", String(usePrefix));
+    localStorage.setItem("rb_avoidNum", String(avoidNumbers));
+    localStorage.setItem("rb_starter", genStarter);
+    localStorage.setItem("rb_gender", genGender);
+    localStorage.setItem("rb_delay", String(delayMs));
+  }, [genCount, genPassword, genPrefix, usePrefix, avoidNumbers, genStarter, genGender, delayMs]);
 
   const saveHistory = useCallback(async (list: RegisteredAccount[]) => {
     setHistory(list);
@@ -87,178 +197,237 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
   }, []);
 
   function pushLog(msg: string, type: "ok" | "err" | "info" = "info") {
-    setRunLog((p) => [...p.slice(-199), { msg, type }]);
+    setRunLog((p) => [...p.slice(-299), { msg, type }]);
   }
 
-  // ── Parse bulk input
-  function parseJobs(): RegisterJob[] {
-    return bulkText
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith("#"))
-      .map((line) => {
-        const parts = line.split(":");
-        if (bulkFormat === "nick:login:pass") {
-          return { nick: parts[0] || "", login: parts[1] || "", password: parts[2] || "", trainerName: parts[3] || defaultTrainer || parts[0] || "" };
-        } else if (bulkFormat === "login:pass:nick") {
-          return { login: parts[0] || "", password: parts[1] || "", nick: parts[2] || "", trainerName: defaultTrainer || parts[2] || "" };
-        } else {
-          // nick:login:pass:trainer
-          return { nick: parts[0] || "", login: parts[1] || "", password: parts[2] || "", trainerName: parts[3] || defaultTrainer || parts[0] || "" };
-        }
-      })
-      .filter((j) => j.login && j.password && j.nick);
-  }
+  // ── Run automatic registration via BrowserWindow
+  async function runBulkBrowser() {
+    if (genCount < 1) {
+      pushLog("Quantidade de contas inválida.", "err");
+      return;
+    }
 
-  // ── Register a single account
-  async function registerOne(job: RegisterJob): Promise<RegisteredAccount> {
-    const entry: RegisteredAccount = {
-      id: uid(),
-      login: job.login,
-      password: job.password,
-      nick: job.nick,
-      trainerName: job.trainerName,
-      token: "",
-      registeredAt: Date.now(),
-      status: "pending",
-      addedToBot: false,
+    const config: RegisterConfig = {
+      count: genCount,
+      password: genPassword,
+      prefix: genPrefix,
+      usePrefix: usePrefix,
+      avoidNumbers: avoidNumbers,
+      starterId: parseInt(genStarter, 10) || 7,
+      gender: genGender
     };
+
+    setIsRunning(true);
+    setRunLog([]);
+    setProgress({ current: 0, total: config.count });
+    pushLog(`Iniciando navegador para registrar ${config.count} conta(s)...`, "info");
+
+    // Subscribe to progress events from main process
+    const unsubProgress = on("regbot:progress", (info: unknown) => {
+      const prog = info as BrowserProgress;
+      setProgress({ current: prog.current, total: prog.total });
+      const prefix = `[${prog.current}/${prog.total}] [${prog.nick}]`;
+      const isErr = prog.action.startsWith("✗") || prog.action.startsWith("ERRO");
+      const isOk = prog.action.startsWith("✓");
+      pushLog(`${prefix} ${prog.action}`, isOk ? "ok" : isErr ? "err" : "info");
+
+      // When a result arrives, update history
+      if (prog.result) {
+        const r = prog.result;
+        setHistory((prev) => {
+          // Check if we already have this account
+          const existing = prev.find((h) => h.login === r.login);
+          if (existing) {
+            const updated = prev.map((h) =>
+              h.login === r.login ? {
+                ...h,
+                status: r.success ? "ok" as const : "error" as const,
+                token: r.success && r.token ? r.token : h.token,
+                lastLoginAt: r.success ? Date.now() : h.lastLoginAt,
+                errorMsg: r.success ? undefined : r.message,
+              } : h
+            );
+            invoke("regbot:history-save", updated);
+            return updated;
+          } else {
+            const newEntry: RegisteredAccount = {
+              id: uid(),
+              login: r.login,
+              password: genPassword,
+              nick: r.nick,
+              trainerName: r.nick,
+              token: r.token || "",
+              restoreKey: (r as any).restoreKey || "",
+              starterId: config.starterId,
+              gender: config.gender,
+              registeredAt: Date.now(),
+              lastLoginAt: r.success ? Date.now() : undefined,
+              status: r.success ? "ok" : "error",
+              errorMsg: r.success ? undefined : r.message,
+              addedToBot: false,
+            };
+            const updated = [...prev, newEntry];
+            invoke("regbot:history-save", updated);
+            return updated;
+          }
+        });
+      }
+    });
+
     try {
-      const res = await invoke<{ success: boolean; token?: string; message?: string }>("regbot:register", {
-        login: job.login,
-        password: job.password,
-        nick: job.nick,
-        trainerName: job.trainerName,
-      });
-      if (res?.success && res.token) {
-        entry.token = res.token;
-        entry.status = "ok";
-        entry.lastLoginAt = Date.now();
+      const res = await invoke<{ success: boolean; results: any[]; message?: string }>(
+        "regbot:run-browser",
+        { config, delayMs }
+      );
+      if (res?.success) {
+        const ok = res.results?.filter((r) => r.success).length ?? 0;
+        pushLog(`✓ Concluído! ${ok}/${config.count} conta(s) registrada(s) com sucesso.`, "ok");
       } else {
-        entry.status = "error";
-        entry.errorMsg = res?.message || "Erro desconhecido";
+        pushLog(`✗ Erro: ${res?.message || "Falha desconhecida"}`, "err");
       }
     } catch (e: any) {
-      entry.status = "error";
-      entry.errorMsg = e.message || "Erro de rede";
-    }
-    return entry;
-  }
-
-  // ── Login (refresh token) for an existing account
-  async function refreshToken(id: string) {
-    const entry = history.find((h) => h.id === id);
-    if (!entry) return;
-    const updated = history.map((h) => h.id === id ? { ...h, status: "refreshing" as const } : h);
-    setHistory(updated);
-    await invoke("regbot:history-save", updated);
-
-    try {
-      const res = await invoke<{ success: boolean; token?: string; message?: string }>("regbot:login", {
-        login: entry.login,
-        password: entry.password,
-      });
-      const newEntry: RegisteredAccount = {
-        ...entry,
-        status: res?.success && res.token ? "ok" : "error",
-        token: res?.success && res.token ? res.token : entry.token,
-        lastLoginAt: res?.success ? Date.now() : entry.lastLoginAt,
-        errorMsg: res?.success ? undefined : (res?.message || "Falha no login"),
-      };
-      const next = history.map((h) => h.id === id ? newEntry : h);
-      await saveHistory(next);
-      pushLog(`[${entry.nick}] ${res?.success ? "Token renovado!" : "Falha: " + res?.message}`, res?.success ? "ok" : "err");
-    } catch (e: any) {
-      const next = history.map((h) => h.id === id ? { ...h, status: "error" as const, errorMsg: e.message } : h);
-      await saveHistory(next);
-      pushLog(`[${entry.nick}] Erro: ${e.message}`, "err");
+      pushLog(`✗ Exceção: ${e.message}`, "err");
+    } finally {
+      unsubProgress();
+      setIsRunning(false);
     }
   }
 
-  // ── Refresh ALL tokens sequentially
-  async function refreshAll() {
+  // ── Refresh all tokens via BrowserWindow
+  async function refreshAllBrowser() {
     const valid = history.filter((h) => h.login && h.password);
+    if (valid.length === 0) {
+      pushLog("Nenhuma conta com credenciais para renovar.", "err");
+      return;
+    }
+
     setIsRunning(true);
     setRunLog([]);
     setProgress({ current: 0, total: valid.length });
+    pushLog(`Iniciando navegador para renovar ${valid.length} token(s)...`, "info");
 
-    for (let i = 0; i < valid.length; i++) {
-      const entry = valid[i];
-      setProgress({ current: i + 1, total: valid.length });
-      pushLog(`[${i + 1}/${valid.length}] Renovando token: ${entry.nick} (${entry.login})...`);
+    // Mark all as refreshing
+    const refreshingHistory = history.map((h) =>
+      valid.some((v) => v.id === h.id) ? { ...h, status: "refreshing" as const } : h
+    );
+    setHistory(refreshingHistory);
 
-      // Mark as refreshing
-      setHistory((prev) => prev.map((h) => h.id === entry.id ? { ...h, status: "refreshing" as const } : h));
+    const unsubProgress = on("regbot:progress", (info: unknown) => {
+      const prog = info as BrowserProgress;
+      setProgress({ current: prog.current, total: prog.total });
+      const prefix = `[${prog.current}/${prog.total}] [${prog.nick}]`;
+      const isErr = prog.action.startsWith("✗") || prog.action.startsWith("ERRO");
+      const isOk = prog.action.startsWith("✓");
+      pushLog(`${prefix} ${prog.action}`, isOk ? "ok" : isErr ? "err" : "info");
 
-      try {
-        const res = await invoke<{ success: boolean; token?: string; message?: string }>("regbot:login", {
-          login: entry.login,
-          password: entry.password,
+      if (prog.result) {
+        const r = prog.result;
+        setHistory((prev) => {
+          const updated = prev.map((h) =>
+            h.login === r.login ? {
+              ...h,
+              status: r.success ? "ok" as const : "error" as const,
+              token: r.success && r.token ? r.token : h.token,
+              lastLoginAt: r.success ? Date.now() : h.lastLoginAt,
+              errorMsg: r.success ? undefined : r.message,
+            } : h
+          );
+          invoke("regbot:history-save", updated);
+          return updated;
         });
-        setHistory((prev) => prev.map((h) => h.id === entry.id ? {
-          ...h,
-          status: res?.success && res.token ? "ok" : "error",
-          token: res?.success && res.token ? res.token : h.token,
-          lastLoginAt: res?.success ? Date.now() : h.lastLoginAt,
-          errorMsg: res?.success ? undefined : (res?.message || "Falha"),
-        } : h));
-        pushLog(`  → ${entry.nick}: ${res?.success ? "OK" : "ERRO - " + res?.message}`, res?.success ? "ok" : "err");
-      } catch (e: any) {
-        setHistory((prev) => prev.map((h) => h.id === entry.id ? { ...h, status: "error" as const, errorMsg: e.message } : h));
-        pushLog(`  → ${entry.nick}: Exceção - ${e.message}`, "err");
       }
-
-      if (i < valid.length - 1) await new Promise((r) => setTimeout(r, delayMs));
-    }
-
-    // Save final state
-    setHistory((prev) => {
-      invoke("regbot:history-save", prev);
-      return prev;
     });
-    setIsRunning(false);
-    pushLog("✓ Refresh de tokens concluído!", "ok");
+
+    try {
+      const accounts = valid.map((h) => ({
+        login: h.login, password: h.password,
+        nick: h.nick, trainerName: h.trainerName,
+      }));
+      const res = await invoke<{ success: boolean; results: any[]; message?: string }>(
+        "regbot:login-browser",
+        { accounts, delayMs }
+      );
+      if (res?.success) {
+        const ok = res.results?.filter((r: any) => r.success).length ?? 0;
+        pushLog(`✓ Tokens renovados! ${ok}/${valid.length} com sucesso.`, "ok");
+      } else {
+        pushLog(`✗ Erro: ${res?.message || "Falha"}`, "err");
+      }
+    } catch (e: any) {
+      pushLog(`✗ Exceção: ${e.message}`, "err");
+    } finally {
+      unsubProgress();
+      setIsRunning(false);
+    }
   }
 
-  // ── Run bulk registration
-  async function runBulk() {
-    const jobs = parseJobs();
-    if (jobs.length === 0) {
-      pushLog("Nenhuma conta válida para registrar.", "err");
-      return;
-    }
+  // ── Refresh single token (via Browser for Turnstile)
+  async function refreshTokenApi(id: string) {
+    const entry = history.find((h) => h.id === id);
+    if (!entry) return;
+    
     setIsRunning(true);
     setRunLog([]);
-    setProgress({ current: 0, total: jobs.length });
+    setProgress({ current: 0, total: 1 });
+    pushLog(`Iniciando navegador para renovar token de [${entry.nick}]...`, "info");
 
-    const newEntries: RegisteredAccount[] = [];
+    const updated = history.map((h) => h.id === id ? { ...h, status: "refreshing" as const } : h);
+    setHistory(updated);
 
-    for (let i = 0; i < jobs.length; i++) {
-      const job = jobs[i];
-      setProgress({ current: i + 1, total: jobs.length });
-      pushLog(`[${i + 1}/${jobs.length}] Registrando: ${job.nick} (${job.login})...`);
-      const entry = await registerOne(job);
-      newEntries.push(entry);
-      pushLog(`  → ${entry.status === "ok" ? "OK ✓ Token obtido" : "ERRO: " + entry.errorMsg}`, entry.status === "ok" ? "ok" : "err");
-      const next = [...history, ...newEntries.slice(newEntries.indexOf(entry))];
-      setHistory([...history, ...newEntries]);
-      if (i < jobs.length - 1) await new Promise((r) => setTimeout(r, delayMs));
+    const unsubProgress = on("regbot:progress", (info: unknown) => {
+      const prog = info as BrowserProgress;
+      const prefix = `[1/1] [${prog.nick}]`;
+      const isErr = prog.action.startsWith("✗") || prog.action.startsWith("ERRO");
+      const isOk = prog.action.startsWith("✓");
+      pushLog(`${prefix} ${prog.action}`, isOk ? "ok" : isErr ? "err" : "info");
+
+      if (prog.result) {
+        const r = prog.result;
+        setHistory((prev) => {
+          const next = prev.map((h) =>
+            h.id === entry.id ? {
+              ...h,
+              status: r.success ? "ok" as const : "error" as const,
+              token: r.success && r.token ? r.token : h.token,
+              lastLoginAt: r.success ? Date.now() : h.lastLoginAt,
+              errorMsg: r.success ? undefined : r.message,
+            } : h
+          );
+          invoke("regbot:history-save", next);
+          return next;
+        });
+      }
+    });
+
+    try {
+      const accounts = [{
+        login: entry.login, password: entry.password,
+        nick: entry.nick, trainerName: entry.trainerName,
+      }];
+      const res = await invoke<{ success: boolean; results: any[]; message?: string }>(
+        "regbot:login-browser",
+        { accounts, delayMs: 1000 }
+      );
+      if (res?.success) {
+        pushLog(`✓ Processo concluído para [${entry.nick}].`, "ok");
+      } else {
+        pushLog(`✗ Erro: ${res?.message || "Falha"}`, "err");
+      }
+    } catch (e: any) {
+      pushLog(`✗ Exceção: ${e.message}`, "err");
+    } finally {
+      unsubProgress();
+      setIsRunning(false);
     }
-
-    const finalHistory = [...history, ...newEntries];
-    await saveHistory(finalHistory);
-    setIsRunning(false);
-    pushLog(`✓ Concluído: ${newEntries.filter((e) => e.status === "ok").length}/${jobs.length} registradas com sucesso!`, "ok");
   }
 
-  // ── Add account to bot
+  // ── Add to bot
   async function addToBot(id: string) {
     const entry = history.find((h) => h.id === id);
     if (!entry || !entry.token) return;
     const existing = await invoke<any[]>("accounts:list") || [];
     const alreadyExists = existing.some((a) => a.name === entry.nick);
     if (alreadyExists) {
-      // update token only
       const updated = existing.map((a) => a.name === entry.nick ? { ...a, token: entry.token } : a);
       await invoke("accounts:save", updated);
       pushLog(`[${entry.nick}] Token atualizado no bot!`, "ok");
@@ -281,7 +450,6 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
     const existingNames = new Set(existing.map((a) => a.name));
     let added = 0;
     const toAdd = [...existing];
-
     for (const entry of okEntries) {
       if (existingNames.has(entry.nick)) {
         const idx = toAdd.findIndex((a) => a.name === entry.nick);
@@ -295,12 +463,66 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
         added++;
       }
     }
-
     await invoke("accounts:save", toAdd);
     const next = history.map((h) => h.status === "ok" && h.token ? { ...h, addedToBot: true } : h);
     await saveHistory(next);
     onAccountsChanged?.();
     pushLog(`✓ ${added} conta(s) adicionadas, ${okEntries.length - added} token(s) atualizado(s)!`, "ok");
+  }
+
+  // ── Import from accounts.json
+  async function importFromAccountsJson() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        try {
+          const content = ev.target?.result as string;
+          const existing = JSON.parse(content);
+          if (!Array.isArray(existing)) throw new Error("O arquivo JSON não contém uma lista válida.");
+          
+          setHistory((prev) => {
+            let added = 0;
+            const next = [...prev];
+            for (const acc of existing) {
+              if (!acc.email || !acc.password) continue;
+              const exists = next.find((h) => h.nick === acc.name);
+              if (!exists) {
+                next.push({
+                  id: uid(),
+                  login: acc.email,
+                  password: acc.password,
+                  nick: acc.name,
+                  trainerName: acc.name,
+                  token: acc.token || "",
+                  registeredAt: Date.now(),
+                  status: acc.token ? "ok" : "pending",
+                  addedToBot: true,
+                  restoreKey: "",
+                });
+                added++;
+              }
+            }
+            if (added > 0) {
+              invoke("regbot:history-save", next);
+              pushLog(`✓ ${added} conta(s) importada(s) do arquivo!`, "ok");
+              return next;
+            } else {
+              pushLog(`Nenhuma conta nova com email/senha para importar.`, "info");
+              return prev;
+            }
+          });
+        } catch (err: any) {
+          pushLog(`✗ Erro ao importar: ${err.message}`, "err");
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
   }
 
   // ── Delete entry
@@ -309,7 +531,7 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
     await saveHistory(next);
   }
 
-  // ── Export history CSV
+  // ── Export CSV
   function exportCsv() {
     const rows = [["nick", "login", "senha", "treinador", "token", "registrado", "ultimo_login", "status"].join(";")];
     for (const h of history) {
@@ -361,10 +583,10 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
   // ────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[rgb(var(--bg-deep))]">
-      {/* ── Header */}
+      {/* Header */}
       <div className="flex items-center gap-3 px-5 py-3 border-b border-[rgb(var(--border))] shrink-0">
-        <UserPlus size={15} className="text-[rgb(var(--accent))]" />
-        <h2 className="text-[14px] font-semibold text-[rgb(var(--text-primary))]">Registro Automático de Contas</h2>
+        <Globe size={15} className="text-[rgb(var(--accent))]" />
+        <h2 className="text-[14px] font-semibold text-[rgb(var(--text-primary))]">Registro Automático via Navegador</h2>
         <div className="ml-auto flex items-center gap-2 text-[11px]">
           <span className="px-2 py-0.5 rounded-full bg-green-600/20 text-green-400">{okCount} ok</span>
           <span className="px-2 py-0.5 rounded-full bg-red-600/20 text-red-400">{errCount} erro</span>
@@ -373,79 +595,146 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* ── Left: Form + Log */}
-        <div className="w-[300px] shrink-0 flex flex-col border-r border-[rgb(var(--border))] overflow-y-auto p-4 space-y-4">
+        {/* Left panel */}
+        <div className="w-[290px] shrink-0 flex flex-col border-r border-[rgb(var(--border))] overflow-y-auto p-4 space-y-3">
 
-          {/* Format */}
+          {/* Info banner */}
+          <div className="bg-[rgb(var(--accent))]/10 border border-[rgb(var(--accent))]/20 rounded-md px-3 py-2 text-[11px] text-[rgb(var(--accent))] leading-relaxed">
+            <Globe size={11} className="inline mr-1 -mt-0.5" />
+            Um navegador real será aberto e os campos serão preenchidos automaticamente.
+          </div>
+
+          {/* Generator Fields */}
           <div>
-            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Formato das linhas</label>
+            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Contas por Ciclo (Browser)</label>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setGenCount(Math.max(1, genCount - 1))}
+                className="w-8 h-8 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--accent))]/10 flex items-center justify-center font-bold"
+              >-</button>
+              <input
+                type="number"
+                min={1} max={100}
+                value={genCount}
+                onChange={(e) => setGenCount(parseInt(e.target.value) || 1)}
+                className="flex-1 px-2 py-1.5 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))] text-center"
+              />
+              <button
+                onClick={() => setGenCount(genCount + 1)}
+                className="w-8 h-8 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--accent))]/10 flex items-center justify-center font-bold"
+              >+</button>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Senha Padrão</label>
+            <div className="relative">
+              <input
+                type={showGenPassword ? "text" : "password"}
+                value={genPassword}
+                onChange={(e) => setGenPassword(e.target.value)}
+                className="w-full pl-2 pr-8 py-1.5 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))]"
+                placeholder="Senha Padrão"
+              />
+              <button
+                type="button"
+                onClick={() => setShowGenPassword(!showGenPassword)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-[rgb(var(--text-faint))] hover:text-[rgb(var(--text-primary))]"
+              >
+                {showGenPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] font-semibold">Prefixo Nick</label>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={avoidNumbers}
+                    onChange={(e) => setAvoidNumbers(e.target.checked)}
+                    className="accent-[rgb(var(--accent))] w-3 h-3"
+                  />
+                  <span className="text-[10px] text-[rgb(var(--text-secondary))] whitespace-nowrap">Evitar Números</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={usePrefix}
+                    onChange={(e) => setUsePrefix(e.target.checked)}
+                    className="accent-[rgb(var(--accent))] w-3 h-3"
+                  />
+                  <span className="text-[10px] text-[rgb(var(--text-secondary))]">Ativo</span>
+                </label>
+              </div>
+            </div>
+            <input
+              type="text"
+              value={genPrefix}
+              onChange={(e) => setGenPrefix(e.target.value)}
+              disabled={!usePrefix}
+              className="w-full px-2 py-1.5 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))] disabled:opacity-50"
+              placeholder="Ex: Player"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Pokémon Inicial</label>
             <select
-              value={bulkFormat}
-              onChange={(e) => setBulkFormat(e.target.value as any)}
+              value={genStarter}
+              onChange={(e) => setGenStarter(e.target.value)}
               className="w-full px-2 py-1.5 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))]"
             >
-              <option value="nick:login:pass">nick:login:senha</option>
-              <option value="login:pass:nick">login:senha:nick</option>
-              <option value="nick:login:pass:trainer">nick:login:senha:treinador</option>
+              <option value="0">Aleatório</option>
+              <option value="1">Bulbasaur (1)</option>
+              <option value="4">Charmander (4)</option>
+              <option value="7">Squirtle (7)</option>
             </select>
           </div>
 
-          {/* Default trainer */}
           <div>
-            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Nome do Treinador Padrão</label>
-            <input
-              value={defaultTrainer}
-              onChange={(e) => setDefaultTrainer(e.target.value)}
-              placeholder="(usa o nick se vazio)"
+            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Gênero</label>
+            <select
+              value={genGender}
+              onChange={(e) => setGenGender(e.target.value)}
               className="w-full px-2 py-1.5 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))]"
-            />
+            >
+              <option value="random">Aleatório</option>
+              <option value="male">Masculino</option>
+              <option value="female">Feminino</option>
+            </select>
           </div>
 
-          {/* Delay */}
           <div>
-            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Delay entre registros (ms)</label>
+            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Atraso entre contas (ms)</label>
             <input
               type="number"
               value={delayMs}
-              onChange={(e) => setDelayMs(Math.max(500, Number(e.target.value)))}
-              min={500}
-              max={10000}
-              step={500}
+              onChange={(e) => setDelayMs(Math.max(1000, Number(e.target.value)))}
+              min={1000} max={15000} step={500}
               className="w-full px-2 py-1.5 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))]"
-            />
-          </div>
-
-          {/* Bulk textarea */}
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">
-              Contas ({parseJobs().length} válidas)
-            </label>
-            <textarea
-              value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
-              placeholder={"# Um por linha\nnick:login@email.com:senha123\nnick2:login2@email.com:senha456"}
-              rows={8}
-              className="w-full px-2 py-2 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[11px] text-[rgb(var(--text-primary))] font-mono focus:outline-none focus:border-[rgb(var(--accent))] resize-none"
             />
           </div>
 
           {/* Actions */}
           <div className="space-y-2">
             <button
-              onClick={runBulk}
-              disabled={isRunning || parseJobs().length === 0}
+              onClick={runBulkBrowser}
+              disabled={isRunning || genCount < 1}
               className="w-full py-2 rounded-md text-[12px] font-semibold bg-[rgb(var(--accent))]/15 text-[rgb(var(--accent))] hover:bg-[rgb(var(--accent))]/25 disabled:opacity-40 transition-colors flex items-center justify-center gap-2"
             >
-              <UserPlus size={13} />
-              {isRunning ? `Registrando... (${progress.current}/${progress.total})` : "Registrar Contas"}
+              <Globe size={13} />
+              {isRunning ? `Registrando... (${progress.current}/${progress.total})` : "Registrar via Navegador"}
             </button>
             <button
-              onClick={refreshAll}
+              onClick={refreshAllBrowser}
               disabled={isRunning || history.length === 0}
               className="w-full py-2 rounded-md text-[12px] font-medium bg-blue-600/15 text-blue-400 hover:bg-blue-600/25 disabled:opacity-40 transition-colors flex items-center justify-center gap-2"
             >
               <RefreshCw size={13} />
-              Renovar Todos os Tokens
+              Renovar Tokens via Navegador
             </button>
             <button
               onClick={addAllToBot}
@@ -454,6 +743,14 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
             >
               <CheckCircle2 size={13} />
               Adicionar Todas (OK) ao Bot
+            </button>
+            <button
+              onClick={importFromAccountsJson}
+              disabled={isRunning}
+              className="w-full py-2 rounded-md text-[12px] font-medium bg-[rgb(var(--accent))]/15 text-[rgb(var(--accent))] hover:bg-[rgb(var(--accent))]/25 disabled:opacity-40 transition-colors flex items-center justify-center gap-2"
+            >
+              <UserPlus size={13} />
+              Importar Contas Salvas
             </button>
             <button
               onClick={exportCsv}
@@ -469,7 +766,7 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
           {isRunning && progress.total > 0 && (
             <div className="w-full bg-[rgb(var(--bg-surface))] rounded-full h-1.5 overflow-hidden">
               <div
-                className="h-full bg-[rgb(var(--accent))] transition-all"
+                className="h-full bg-[rgb(var(--accent))] transition-all duration-300"
                 style={{ width: `${(progress.current / progress.total) * 100}%` }}
               />
             </div>
@@ -478,20 +775,21 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
           {/* Log */}
           <div>
             <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1 font-semibold">Log de Operações</label>
-            <div className="h-40 overflow-y-auto bg-[rgb(var(--bg-deep))] rounded-md border border-[rgb(var(--border))] p-2 space-y-0.5 font-mono text-[10px]">
+            <div className="h-44 overflow-y-auto bg-[rgb(var(--bg-deep))] rounded-md border border-[rgb(var(--border))] p-2 space-y-0.5 font-mono text-[10px]">
               {runLog.length === 0 && <div className="text-[rgb(var(--text-faint))]">Aguardando...</div>}
               {runLog.map((l, i) => (
                 <div key={i} className={l.type === "ok" ? "text-green-400" : l.type === "err" ? "text-red-400" : "text-[rgb(var(--text-secondary))]"}>
                   {l.msg}
                 </div>
               ))}
+              <div ref={logEndRef} />
             </div>
           </div>
         </div>
 
-        {/* ── Right: History table */}
+        {/* Right panel: history table */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Table toolbar */}
+          {/* Toolbar */}
           <div className="flex items-center gap-2 px-4 py-2 border-b border-[rgb(var(--border))] shrink-0">
             <div className="relative">
               <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-[rgb(var(--text-faint))]" />
@@ -499,7 +797,7 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Buscar..."
-                className="pl-7 pr-3 py-1 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))] w-48"
+                className="pl-7 pr-3 py-1 rounded-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border))] text-[12px] text-[rgb(var(--text-primary))] focus:outline-none focus:border-[rgb(var(--accent))] w-44"
               />
             </div>
             <div className="flex items-center gap-1">
@@ -518,8 +816,10 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
           </div>
 
           {/* Table header */}
-          <div className="grid text-[11px] font-semibold uppercase tracking-wider text-[rgb(var(--text-muted))] px-4 py-2 border-b border-[rgb(var(--border))] shrink-0"
-            style={{ gridTemplateColumns: "24px 1fr 1fr 1fr 80px 120px 120px 140px" }}>
+          <div
+            className="grid text-[11px] font-semibold uppercase tracking-wider text-[rgb(var(--text-muted))] px-4 py-2 border-b border-[rgb(var(--border))] shrink-0"
+            style={{ gridTemplateColumns: "24px 1fr 1fr 1fr 80px 110px 110px 130px" }}
+          >
             <div />
             <button className="text-left flex items-center gap-1" onClick={() => toggleSort("nick")}>Nick <SortIcon k="nick" /></button>
             <div>Login</div>
@@ -541,7 +841,7 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
               <div key={entry.id}>
                 <div
                   className="grid items-center px-4 py-2 border-b border-[rgb(var(--border))]/40 hover:bg-[rgb(var(--bg-surface))]/40 transition-colors cursor-pointer text-[12px]"
-                  style={{ gridTemplateColumns: "24px 1fr 1fr 1fr 80px 120px 120px 140px" }}
+                  style={{ gridTemplateColumns: "24px 1fr 1fr 1fr 80px 110px 110px 130px" }}
                   onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
                 >
                   {/* Status icon */}
@@ -551,35 +851,26 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
                     {entry.status === "pending" && <Clock size={13} className="text-yellow-400" />}
                     {entry.status === "refreshing" && <RefreshCw size={13} className="text-blue-400 animate-spin" />}
                   </div>
-
-                  {/* Nick */}
                   <div className="truncate font-medium text-[rgb(var(--text-primary))]">{entry.nick}</div>
-
-                  {/* Login */}
                   <div className="truncate text-[rgb(var(--text-secondary))]">{entry.login}</div>
-
-                  {/* Trainer */}
                   <div className="truncate text-[rgb(var(--text-secondary))]">{entry.trainerName || "—"}</div>
-
-                  {/* Status */}
                   <div>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${entry.status === "ok" ? "bg-green-600/20 text-green-400" : entry.status === "error" ? "bg-red-600/20 text-red-400" : entry.status === "refreshing" ? "bg-blue-600/20 text-blue-400" : "bg-yellow-600/20 text-yellow-400"}`}>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                      entry.status === "ok" ? "bg-green-600/20 text-green-400" :
+                      entry.status === "error" ? "bg-red-600/20 text-red-400" :
+                      entry.status === "refreshing" ? "bg-blue-600/20 text-blue-400" :
+                      "bg-yellow-600/20 text-yellow-400"
+                    }`}>
                       {entry.status === "refreshing" ? "..." : entry.status}
                     </span>
                   </div>
-
-                  {/* Registered */}
                   <div className="text-[11px] text-[rgb(var(--text-faint))]">{fmtDate(entry.registeredAt)}</div>
-
-                  {/* Last login */}
                   <div className="text-[11px] text-[rgb(var(--text-faint))]">{fmtDate(entry.lastLoginAt)}</div>
-
-                  {/* Actions */}
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     <button
-                      onClick={() => refreshToken(entry.id)}
+                      onClick={() => refreshTokenApi(entry.id)}
                       disabled={isRunning || entry.status === "refreshing"}
-                      title="Renovar Token (Relogar)"
+                      title="Renovar Token (API rápida)"
                       className="p-1.5 rounded hover:bg-blue-600/20 text-blue-400 disabled:opacity-40 transition-colors"
                     >
                       <RefreshCw size={12} />
@@ -593,6 +884,13 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
                         <CheckCircle2 size={12} />
                       </button>
                     )}
+                    <button
+                      onClick={() => openEditModal(entry)}
+                      title="Editar"
+                      className="p-1.5 rounded hover:bg-yellow-600/20 text-yellow-400 transition-colors"
+                    >
+                      <Edit2 size={12} />
+                    </button>
                     <button
                       onClick={() => deleteEntry(entry.id)}
                       title="Remover"
@@ -609,7 +907,7 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
                     {entry.errorMsg && (
                       <div className="text-red-400 bg-red-600/10 px-3 py-1.5 rounded text-[11px]">⚠ {entry.errorMsg}</div>
                     )}
-                    <div className="grid grid-cols-2 gap-x-8 gap-y-2">
+                    <div className="grid grid-cols-2 gap-x-8 gap-y-3">
                       <div>
                         <div className="text-[10px] text-[rgb(var(--text-muted))] mb-0.5">Senha</div>
                         <div className="flex items-center gap-2">
@@ -628,19 +926,44 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
                             {showTokens[entry.id] ? (entry.token || "—") : maskToken(entry.token)}
                           </span>
                           {entry.token && (
-                            <button onClick={() => setShowTokens((p) => ({ ...p, [entry.id]: !p[entry.id] }))} className="text-[rgb(var(--text-faint))] hover:text-[rgb(var(--text-primary))] shrink-0">
-                              {showTokens[entry.id] ? <EyeOff size={11} /> : <Eye size={11} />}
-                            </button>
+                            <>
+                              <button onClick={() => setShowTokens((p) => ({ ...p, [entry.id]: !p[entry.id] }))} className="text-[rgb(var(--text-faint))] hover:text-[rgb(var(--text-primary))] shrink-0">
+                                {showTokens[entry.id] ? <EyeOff size={11} /> : <Eye size={11} />}
+                              </button>
+                              <button onClick={() => navigator.clipboard.writeText(entry.token)} title="Copiar token" className="shrink-0 text-[rgb(var(--text-faint))] hover:text-[rgb(var(--accent))]">
+                                <Key size={11} />
+                              </button>
+                            </>
                           )}
-                          {entry.token && (
-                            <button
-                              onClick={() => navigator.clipboard.writeText(entry.token)}
-                              title="Copiar token"
-                              className="shrink-0 text-[rgb(var(--text-faint))] hover:text-[rgb(var(--accent))]"
-                            >
-                              <Key size={11} />
-                            </button>
-                          )}
+                        </div>
+                      </div>
+                      
+                      {/* Restore Key and additional details */}
+                      <div className="col-span-2 grid grid-cols-3 gap-x-4 pt-2 border-t border-[rgb(var(--border))]/20">
+                        <div>
+                          <div className="text-[10px] text-[rgb(var(--text-muted))] mb-0.5">Dropmail Restore Key</div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-[11px] text-[rgb(var(--text-secondary))] break-all">
+                              {showRestoreKeys[entry.id] ? (entry.restoreKey || "—") : (entry.restoreKey ? "••••••••" : "—")}
+                            </span>
+                            {entry.restoreKey && (
+                              <button onClick={() => setShowRestoreKeys((p) => ({ ...p, [entry.id]: !p[entry.id] }))} className="text-[rgb(var(--text-faint))] hover:text-[rgb(var(--text-primary))] shrink-0">
+                                {showRestoreKeys[entry.id] ? <EyeOff size={11} /> : <Eye size={11} />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-[rgb(var(--text-muted))] mb-0.5">Pokémon Inicial</div>
+                          <div className="text-[11px] text-[rgb(var(--text-secondary))]">
+                            {entry.starterId === 1 ? "Bulbasaur" : entry.starterId === 4 ? "Charmander" : entry.starterId === 7 ? "Squirtle" : (entry.starterId || "—")}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-[rgb(var(--text-muted))] mb-0.5">Gênero</div>
+                          <div className="text-[11px] text-[rgb(var(--text-secondary))] capitalize">
+                            {entry.gender || "—"}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -651,6 +974,61 @@ export function RegisterBot({ onAccountsChanged }: { onAccountsChanged?: () => v
           </div>
         </div>
       </div>
+
+      {/* Edit Modal */}
+      {editingEntry && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[rgb(var(--bg-card))] border border-[rgb(var(--border))] rounded-lg w-[320px] shadow-xl flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 bg-[rgb(var(--bg-surface))] border-b border-[rgb(var(--border))]">
+              <h3 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Editar Conta</h3>
+              <button
+                onClick={() => setEditingEntry(null)}
+                className="text-[rgb(var(--text-muted))] hover:text-red-400 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-[11px] font-medium text-[rgb(var(--text-secondary))] mb-1">
+                  E-mail (Login)
+                </label>
+                <input
+                  type="text"
+                  value={editLogin}
+                  onChange={(e) => setEditLogin(e.target.value)}
+                  className="w-full bg-[rgb(var(--bg-base))] border border-[rgb(var(--border))] rounded px-3 py-1.5 text-[12px] text-[rgb(var(--text-primary))] focus:border-[rgb(var(--accent))] focus:outline-none transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-[rgb(var(--text-secondary))] mb-1">
+                  Nick
+                </label>
+                <input
+                  type="text"
+                  value={editNick}
+                  onChange={(e) => setEditNick(e.target.value)}
+                  className="w-full bg-[rgb(var(--bg-base))] border border-[rgb(var(--border))] rounded px-3 py-1.5 text-[12px] text-[rgb(var(--text-primary))] focus:border-[rgb(var(--accent))] focus:outline-none transition-colors"
+                />
+              </div>
+            </div>
+            <div className="px-4 py-3 bg-[rgb(var(--bg-surface))]/50 border-t border-[rgb(var(--border))] flex justify-end gap-2">
+              <button
+                onClick={() => setEditingEntry(null)}
+                className="px-3 py-1.5 rounded text-[11px] font-medium text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-base))] hover:text-[rgb(var(--text-primary))] transition-colors border border-transparent hover:border-[rgb(var(--border))]"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={saveEdit}
+                className="px-4 py-1.5 rounded text-[11px] font-medium bg-[rgb(var(--accent))] text-white hover:brightness-110 transition-all shadow-sm"
+              >
+                Salvar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

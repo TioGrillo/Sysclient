@@ -243,7 +243,8 @@ export class BotSession extends EventEmitter {
         try { return JSON.parse(txt); } catch { this.err(`HTTP GET ${path} resposta nao e JSON: ${txt.substring(0, 200)}`); return null; }
       }
       const body = await res.text().catch(() => "");
-      this.err(`HTTP GET ${path} falhou: ${res.status} ${res.statusText} | ${body.substring(0, 200)}`);
+      const errBody = body.startsWith("<") ? body.substring(0, 80) + "..." : body.substring(0, 200);
+      this.err(`HTTP GET ${path} falhou: ${res.status} ${res.statusText} | ${errBody}`);
     } catch (e) {
       this.err(`HTTP GET error: ${e}`);
     }
@@ -270,7 +271,8 @@ export class BotSession extends EventEmitter {
       const res = await fetch(url, options);
       if (res.ok) return await res.json();
       const text = await res.text();
-      this.err(`HTTP POST falhou em ${path}: ${res.status} - ${text}`);
+      const errText = text.startsWith("<") ? text.substring(0, 80) + "..." : text.substring(0, 200);
+      this.err(`HTTP POST falhou em ${path}: ${res.status} - ${errText}`);
     } catch (e) {
       this.err(`HTTP POST error: ${e}`);
     }
